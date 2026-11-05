@@ -1,0 +1,10 @@
+.env
+.claude/
+__pycache__/
+*.pyc
+
+# база с данными пользователей — не для репозитория
+bot_database.db
+
+# служебный файл macOS
+.DS_Store

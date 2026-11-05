@@ -1,0 +1,68 @@
+"""Учить по расписанию: выбор, как часто бот сам присылает слова.
+
+Открывается из «🎴 Учить → 🔔 Присылать по расписанию» (или командой /mailing).
+Экран обновляется на месте.
+"""
+from aiogram import Bot, F, Router
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+
+from utils import database
+from utils.keyboards import OLD_BTN_MAILING, PHRASES, empty_kb, mailing_kb
+from utils.scheduler import start_mailing, stop_mailing
+from utils.ui import show
+
+router = Router()
+
+
+def _screen(user_id):
+    """Текст и кнопки экрана рассылки."""
+    if database.count_words(user_id) == 0:
+        return ('🔔 <b>Рассылка</b>\n\nСловарь пока пуст — мне нечего присылать. '
+                'Сначала добавь слова 👇', empty_kb)
+    minutes = database.get_mailing(user_id)
+    status = f'✅ включена — {PHRASES.get(minutes, f"каждые {minutes} мин")}' if minutes else '⛔ выключена'
+    text = ('🔔 <b>Учить по расписанию</b>\n\n'
+            f'Сейчас: {status}\n\n'
+            'Буду сам присылать по одному слову из словаря, а перевод спрячу '
+            'под спойлер — нажмёшь на него, чтобы проверить себя.\n\n'
+            'Как часто присылать?')
+    return text, mailing_kb(minutes)
+
+
+@router.message(Command('mailing'))
+@router.message(F.text == OLD_BTN_MAILING)
+async def mailing_from_command(message: Message, state: FSMContext):
+    await state.clear()
+    text, kb = _screen(message.from_user.id)
+    await message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == 'study:mailing')
+async def mailing_from_study_menu(callback: CallbackQuery):
+    text, kb = _screen(callback.from_user.id)
+    await show(callback, text, kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith('mail:'))
+async def mailing_set(callback: CallbackQuery, bot: Bot):
+    user_id = callback.from_user.id
+    value = callback.data.split(':', 1)[1]
+
+    if value == 'off':
+        stop_mailing(user_id)
+        note = '🔕 Рассылка выключена'
+    elif value.isdigit() and int(value) in PHRASES:
+        if database.count_words(user_id) == 0:
+            note = 'Сначала добавь слова'
+        else:
+            start_mailing(bot, user_id, int(value))
+            note = f'🔔 Буду присылать {PHRASES[int(value)]}'
+    else:
+        note = 'Неизвестный интервал'
+
+    text, kb = _screen(user_id)
+    await show(callback, text, kb)
+    await callback.answer(note)
