@@ -1,0 +1,2 @@
+# Нужно только для сборки словаря (tools/build_dictionary.py), боту не требуется
+wordfreq

@@ -2,9 +2,13 @@
 .claude/
 __pycache__/
 *.pyc
+.venv/
 
 # база с данными пользователей — не для репозитория
 bot_database.db
+
+# словарь собирается скриптом tools/build_dictionary.py (~35 МБ)
+dictionary.db
 
 # служебный файл macOS
 .DS_Store
