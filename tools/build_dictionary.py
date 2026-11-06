@@ -79,7 +79,23 @@ def ru_translations(rec):
         for t in s.get('translations', []):
             if t.get('lang_code') == 'ru' or t.get('code') == 'ru':
                 add(gloss[:80], t.get('word'))
-    return [(sense, groups[sense][:MAX_RU_PER_SENSE]) for sense in order[:MAX_SENSES]]
+    return [(sense, groups[sense]) for sense in order]
+
+
+def order_translations(groups, main_gloss):
+    """Порядок, в котором бот предлагает переводы.
+
+    В Wiktionary таблицы переводов идут не по популярности: у «go» первой стоит
+    сленговое «to say» → «говорить». Поэтому:
+      • первой ставим таблицу главного значения статьи (её заголовок почти
+        совпадает с первым толкованием: «To move, either physically…»);
+      • внутри значения первым — самый употребительный русский перевод
+        («терпеть» чаще, чем «сносить»).
+    """
+    main = (main_gloss or '').lower()[:25]
+    ordered = sorted(groups, key=lambda group: not (main and group[0].lower()[:25] == main))
+    return [(sense, sorted(words, key=lambda w: -zipf_frequency(w, 'ru'))[:MAX_RU_PER_SENSE])
+            for sense, words in ordered[:MAX_SENSES]]
 
 
 def first_gloss(rec):
@@ -156,7 +172,7 @@ def main(src, dst):
                         and INFLECTION_TAGS & set(tags):
                     pending_forms.append((fw, word_lc, ','.join(tags[:3])))
 
-            groups = ru_translations(rec)
+            groups = order_translations(ru_translations(rec), first_gloss(rec))
             # Фразовые глаголы и выражения берём даже без русского перевода — покажем толкование
             if not groups and not (is_phrase and rec.get('pos') in {'verb', 'phrase', 'prep_phrase', 'adv'}):
                 continue

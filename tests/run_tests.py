@@ -438,6 +438,7 @@ async def main():
     await case('Карточка: «Удалить» убирает слово и показывает следующее', t_card_delete)
 
     from utils import dictionary as dic
+    from utils import russian as rus
 
     def kb_data(msg):
         return [b.callback_data for row in msg.reply_markup.inline_keyboard for b in row]
@@ -473,20 +474,41 @@ async def main():
             texts, _ = await send(msg_update('found'), 'lookup found')
             mid = session.next_id
             labels = kb_text(texts[-1])
-            assert any(l.startswith('основывать') for l in labels), labels
-            assert any(l.startswith('находить') and 'от find' in l for l in labels), labels
-            idx = next(i for i, l in enumerate(labels) if l.startswith('находить'))
-            texts, answers = await send(cb_update(f'lk:{idx}', mid), 'pick находить')
-            assert 'Добавил' in texts[-1].text and '✅ находить' in kb_text(texts[-1])[idx]
-            assert ('found', 'находить') in [(w.word, w.translation) for w in database.get_words(UID)]
-            texts, _ = await send(cb_update('lk:0', mid), 'pick основывать')
+            target = 'нашёл' if rus.available() else 'найти'
+            assert labels[0].startswith(target) and 'от find' in labels[0], labels
+            assert any(l.startswith('основ') or l.startswith('учред') for l in labels), labels
+            idx = 0
+            texts, answers = await send(cb_update(f'lk:{idx}', mid), f'pick {target}')
+            assert 'Добавил' in texts[-1].text and f'✅ {target}' in kb_text(texts[-1])[idx]
+            assert ('found', target) in [(w.word, w.translation) for w in database.get_words(UID)]
+            other = next(i for i, l in enumerate(labels) if 'от find' not in l)
+            texts, _ = await send(cb_update(f'lk:{other}', mid), 'pick own meaning')
             assert len(database.get_words(UID)) == 2, 'второе значение тоже добавляется'
             _, answers = await send(cb_update(f'lk:{idx}', mid), 'pick again')
             assert 'уже добавлено' in answers[-1].text
             await send(cb_update('lk:close', mid), 'close')
             _, answers = await send(cb_update('lk:0', mid), 'after close')
             assert answers[-1].show_alert, 'после закрытия кнопки устаревают'
-        await case('Слово «found» → выбор значений (своё и «от find»), можно добавить несколько', t_lookup_found)
+        await case('Слово «found» → первым «нашёл · от find», есть и своё значение, можно добавить оба', t_lookup_found)
+
+        async def t_inflection():
+            if not rus.available():
+                print('  ⚠️  pymorphy3 не установлен — проверка русских форм пропущена')
+                return
+            expect = {'went': 'шёл', 'found': 'нашёл', 'saw': 'видел', 'keys': 'ключи',
+                      'goes': 'идёт', 'took': 'взял', 'children': 'дети', 'put up with': 'терпеть'}
+            got = {w: dic.meanings(w)[0].translation for w in expect}
+            assert got == expect, got
+            labels = [m.translation for m in dic.meanings('went')]
+            assert not any(l.startswith('очеред') for l in labels), 'у формы глагола нет существительных'
+            found = {i.shown: i.translation for i in dic.extract('I turned the music off and went to bed.')}
+            assert found == {'turned off': 'выключил', 'went to bed': 'лёг спать'}, found
+        await case('Перевод в форме слова: went → шёл, found → нашёл, keys → ключи, turned off → выключил', t_inflection)
+
+        async def t_no_be_phrases():
+            assert dic.extract('I am there for you.') == []
+            assert any(i.shown == 'has to' for i in dic.extract('He has to go.'))
+        await case('«I am there» не превращается в идиому «быть рядом», «has to» находится', t_no_be_phrases)
 
         async def t_lookup_phrase():
             texts, _ = await send(msg_update('Looking For'), 'lookup phrase')

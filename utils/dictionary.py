@@ -12,6 +12,8 @@ from collections import namedtuple
 from functools import lru_cache
 from itertools import product
 
+from utils.russian import inflect
+
 log = logging.getLogger(__name__)
 
 DICT_PATH = 'dictionary.db'
@@ -97,6 +99,26 @@ def _zipf(word_lc):
     return row[0] or 0
 
 
+VERB_TAGS = {'past', 'participle', 'present', 'third-person', 'first-person',
+             'second-person', 'subjunctive', 'gerund', 'infinitive'}
+
+
+@lru_cache(maxsize=20000)
+def _form_tags(form_lc, lemma_lc):
+    """Чем форма отличается от словарной. Возвращает (теги глагола, теги существительного).
+
+    went/go → ({'past', …}, ∅)            keys/key → ({'third-person', …}, {'plural'})
+    Глагольные теги и множественное число существительного разделяем: у «went»
+    есть тег «past, plural» (we went) — это не «очереди» во множественном числе.
+    """
+    verb, noun = set(), set()
+    for (row,) in _db().execute('SELECT tags FROM forms WHERE form_lc = ? AND lemma_lc = ?',
+                                (form_lc, lemma_lc)):
+        tags = {t for t in (row or '').split(',') if t}
+        (verb if tags & VERB_TAGS else noun).update(tags)
+    return frozenset(verb), frozenset(noun)
+
+
 def _phrase_keys(words):
     """Словарные выражения для набора слов: ['looking', 'for'] → ['look for']."""
     candidates = [[w] + _lemmas(w) for w in words]
@@ -105,30 +127,41 @@ def _phrase_keys(words):
     return sorted(found, key=lambda k: not _has_translation(k))   # с переводом — первыми
 
 
-def meanings(text, limit=8):
-    """Варианты перевода слова или короткого выражения. Пустой список — не нашли."""
-    if not available():
-        return []
-    _db()
-    query = ' '.join(TOKEN_RE.findall(text.lower()))
-    if not query:
-        return []
+def _word_sources(word):
+    """Откуда брать переводы одного слова: (статья, пометка, теги формы).
 
-    sources = []                                  # (ключ статьи, пометка)
-    if _entries(query):
-        sources.append((query, None))
-    if ' ' in query:
-        sources += [(key, None) for key in _phrase_keys(query.split()) if key != query]
-    else:
-        sources += [(lemma, f'от {lemma}') for lemma in _lemmas(query)]
+    Сначала словарная форма: «found» чаще всего — прошедшее от find («нашёл»),
+    а не глагол found («основывать»); «saw» — «видел», а не «пила».
+    """
+    sources = [(lemma, f'от {lemma}', _form_tags(word, lemma)) for lemma in _lemmas(word)]
+    if _entries(word):
+        sources.append((word, None, None))
+    return sources
 
-    # С каждой статьи — первые переводы её значений; статьи чередуем,
-    # чтобы у «found» рядом оказались и «основывать», и «находить»
+
+def _phrase_sources(words, keys):
+    """Выражение: форму берём у первого слова — «turned off» → turn off в прошедшем."""
+    sources = []
+    for key in keys:
+        first = key.split()[0]
+        tags = _form_tags(words[0], first) if words[0] != first else None
+        sources.append((key, None, tags))
+    return sources
+
+
+def _translations(sources, limit):
+    """С каждой статьи — первые переводы её значений в нужной форме. Статьи чередуем,
+    чтобы у «found» рядом оказались и «нашёл», и «основывать»."""
     per_entry = []
-    for key, note in sources:
+    for key, note, tags in sources:
+        verb_tags, noun_tags = tags or (frozenset(), frozenset())
         for entry_id, _, pos, ipa in _entries(key):
+            # «went» — форма глагола: существительное go («очередь») не предлагаем
+            if tags is not None and not ((pos == 'verb' and verb_tags) or (pos == 'noun' and noun_tags)):
+                continue
+            form = verb_tags if pos == 'verb' else noun_tags if pos == 'noun' else frozenset()
             example = _example(entry_id)
-            items = [Meaning(group[0], POS_RU.get(pos, pos), note, ipa, example)
+            items = [Meaning(inflect(group[0], pos, form), POS_RU.get(pos, pos), note, ipa, example)
                      for group in _senses(entry_id)[:PER_ENTRY]]
             if items:
                 per_entry.append(items)
@@ -140,6 +173,29 @@ def meanings(text, limit=8):
                 seen.add(items[level].translation.lower())
                 result.append(items[level])
     return result[:limit]
+
+
+def meanings(text, limit=8):
+    """Варианты перевода слова или короткого выражения. Пустой список — не нашли."""
+    if not available():
+        return []
+    _db()
+    words = TOKEN_RE.findall(text.lower())
+    if not words:
+        return []
+    query = ' '.join(words)
+    if len(words) == 1:
+        sources = _word_sources(query)
+    else:
+        sources = [(query, None, None)] if _entries(query) else []
+        sources += _phrase_sources(words, [k for k in _phrase_keys(words) if k != query])
+    return _translations(sources, limit)
+
+
+def _is_be_phrase(key):
+    """«be there», «be in» из «I am there» — почти всегда буквальное «я там», а не идиома."""
+    parts = key.split()
+    return len(parts) == 2 and parts[0] == 'be'
 
 
 def _sentence_of(text, position):
@@ -159,8 +215,8 @@ def extract(text):
     low = [t.group().lower() for t in tokens]
     used, found = set(), []
 
-    def add(first, shown, key):
-        options = meanings(key, limit=1)
+    def add(first, shown, sources):
+        options = _translations(sources, 1)
         if options:
             found.append((tokens[first].start(), Found(
                 shown, options[0].translation, options[0].ipa,
@@ -172,9 +228,9 @@ def extract(text):
             if any(j in used for j in range(i, i + size)):
                 continue
             keys = _phrase_keys(low[i:i + size])
-            if keys and _has_translation(keys[0]):
+            if keys and _has_translation(keys[0]) and not _is_be_phrase(keys[0]):
                 shown = ' '.join(t.group() for t in tokens[i:i + size])
-                add(i, shown, keys[0])
+                add(i, shown, _phrase_sources(low[i:i + size], keys[:1]))
                 used.update(range(i, i + size))
 
     # 2. Разорванные фразовые глаголы: «turned the music off» → turned off
@@ -183,8 +239,9 @@ def extract(text):
             k = i + gap + 1
             if k < len(tokens) and low[k] in PARTICLES and i not in used and k not in used:
                 keys = _phrase_keys([low[i], low[k]])
-                if keys and _has_translation(keys[0]):
-                    add(i, f'{tokens[i].group()} {tokens[k].group()}', keys[0])
+                if keys and _has_translation(keys[0]) and not _is_be_phrase(keys[0]):
+                    add(i, f'{tokens[i].group()} {tokens[k].group()}',
+                        _phrase_sources([low[i], low[k]], keys[:1]))
                     used.update({i, k})
                     break
 
@@ -192,7 +249,7 @@ def extract(text):
     for i, word in enumerate(low):
         if i in used or len(word) < 3 or _zipf(word) >= SIMPLE_ZIPF:
             continue
-        add(i, tokens[i].group(), word)
+        add(i, tokens[i].group(), _word_sources(word))
 
     result, seen = [], set()
     for _, item in sorted(found, key=lambda pair: pair[0]):
