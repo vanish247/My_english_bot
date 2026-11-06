@@ -8,7 +8,8 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class AddWords(StatesGroup):
-    waiting = State()   # ждём пары «слово - перевод»
+    waiting = State()   # режим «Добавить слова»: ждём слова, текст или пары
+    custom = State()    # ждём свой перевод для слова
 
 
 class Study(StatesGroup):

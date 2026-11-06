@@ -21,7 +21,7 @@ def split_pair(text):
 def parse_words(text):
     """Разбирает сообщение на пары. Пары — через запятую, точку с запятой или с новой строки.
 
-    Возвращает (правильные пары в виде 'слово - перевод', куски без перевода).
+    Возвращает (пары (слово, перевод), куски без перевода).
     """
     good, bad = [], []
     for chunk in re.split(r'[,;\n]', text):
@@ -30,10 +30,15 @@ def parse_words(text):
             continue                      # пустые куски (лишняя запятая) пропускаем
         word, translation = split_pair(chunk)
         if translation:
-            good.append(f'{word} - {translation}')
+            good.append((word, translation))
         else:
             bad.append(chunk)
     return good, bad
+
+
+def has_latin(text):
+    """Есть ли в тексте английские буквы."""
+    return re.search(r'[A-Za-z]', text) is not None
 
 
 def plural(n, one, few, many):

@@ -23,7 +23,8 @@ async def during_study(message: Message):
 
 @router.message()
 async def unknown_message(message: Message):
-    await message.answer('Не понял 🤔 Выбери действие в меню 👇', reply_markup=main_menu)
+    await message.answer('Не понял 🤔 Пришли английское слово, текст или выбери действие в меню 👇',
+                         reply_markup=main_menu)
 
 
 @router.callback_query(F.data == 'noop')

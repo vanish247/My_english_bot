@@ -8,7 +8,7 @@ from utils import database
 from utils.keyboards import BTN_WORDS, confirm_clear_kb, empty_kb, vocabulary_kb
 from utils.scheduler import stop_mailing
 from utils.ui import show
-from utils.words import esc, short, split_pair, words_count
+from utils.words import esc, short, words_count
 
 router = Router()
 
@@ -27,11 +27,10 @@ def _page(user_id, page):
 
     lines = [f'📋 <b>Твой словарь</b> — {words_count(len(words))}', '']
     for number, item in enumerate(words[start:start + PAGE_SIZE], start=start + 1):
-        word, translation = split_pair(item)
-        if translation:
-            lines.append(f'{number}. <b>{esc(short(word, 40))}</b> — {esc(short(translation, 40))}')
+        if item.translation:
+            lines.append(f'{number}. <b>{esc(short(item.word, 40))}</b> — {esc(short(item.translation, 40))}')
         else:
-            lines.append(f'{number}. {esc(short(word, 80))}')
+            lines.append(f'{number}. {esc(short(item.word, 80))}')
     return '\n'.join(lines), vocabulary_kb(page, pages)
 
 

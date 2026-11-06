@@ -17,6 +17,7 @@ BTN_STUDY = '🎴 Учить'
 BTN_WORDS = '📋 Мои слова'
 BTN_HELP = 'ℹ️ Помощь'
 OLD_BTN_MAILING = '🔔 Рассылка'   # кнопка прошлой версии: у кого-то ещё висит старое меню
+MENU_BUTTONS = {BTN_ADD, BTN_STUDY, BTN_WORDS, BTN_HELP, OLD_BTN_MAILING}
 
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
@@ -41,6 +42,8 @@ def inline(*rows):
 # ─── Добавление слов ───────────────────────────────────────
 add_kb = inline([('✅ Готово', 'add:done')])
 empty_kb = inline([('📚 Добавить слова', 'add:start')])
+# После добавления вне режима «Добавить слова»
+added_kb = inline([('🎴 Учить', 'study:menu'), ('📋 Мои слова', 'voc:page:0')])
 
 # ─── «Как будем учить?» ────────────────────────────────────
 # Показывается по кнопке «Учить» и после «Готово» при добавлении слов

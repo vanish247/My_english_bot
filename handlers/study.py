@@ -21,7 +21,8 @@ from utils.keyboards import (
 )
 from utils.states import Study
 from utils.ui import show
-from utils.words import esc, split_pair, words_count
+from utils.database import Word
+from utils.words import esc, words_count
 
 router = Router()
 
@@ -69,10 +70,14 @@ async def study_menu_button(callback: CallbackQuery, state: FSMContext):
 # ─── Карточки ──────────────────────────────────────────────
 
 def _card(data, revealed):
-    word, translation = split_pair(data['cards'][data['pos']])
-    text = f'🎴 Карточка {data["pos"] + 1} из {len(data["cards"])}\n\n🇬🇧 <b>{esc(word)}</b>'
+    item = Word(*data['cards'][data['pos']])
+    text = f'🎴 Карточка {data["pos"] + 1} из {len(data["cards"])}\n\n🇬🇧 <b>{esc(item.word)}</b>'
+    if item.transcription:
+        text += f'  {esc(item.transcription)}'
     if revealed:
-        text += f'\n🇷🇺 {esc(translation) if translation else "—"}'
+        text += f'\n🇷🇺 {esc(item.translation) if item.translation else "—"}'
+        if item.example:
+            text += f'\n\n💬 <i>{esc(item.example)}</i>'
     else:
         text += '\n\n<i>Вспомни перевод и нажми «Показать»</i>'
     return text
@@ -116,7 +121,8 @@ async def cards_start(callback: CallbackQuery, state: FSMContext):
         return
     random.shuffle(words)                       # каждый раз новый порядок
     await state.set_state(Study.card)
-    await _show_card(callback, state, {'cards': words, 'pos': 0, 'known': 0}, revealed=False)
+    cards = [tuple(w) for w in words]
+    await _show_card(callback, state, {'cards': cards, 'pos': 0, 'known': 0}, revealed=False)
     await callback.answer()
 
 

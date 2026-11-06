@@ -10,7 +10,7 @@ from aiogram.exceptions import TelegramForbiddenError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from utils import database
-from utils.words import esc, split_pair
+from utils.words import esc
 
 log = logging.getLogger(__name__)
 
@@ -36,10 +36,14 @@ async def send_next_word(bot: Bot, user_id: int):
 
     # % защищает от выхода за границы, если слов стало меньше
     position = _positions.get(user_id, 0) % len(words)
-    word, translation = split_pair(words[position])
-    text = f'🔔 <b>Повторим слово</b>\n\n🇬🇧 <b>{esc(word)}</b>'
-    if translation:
-        text += f'\n🇷🇺 <tg-spoiler>{esc(translation)}</tg-spoiler>'
+    item = words[position]
+    text = f'🔔 <b>Повторим слово</b>\n\n🇬🇧 <b>{esc(item.word)}</b>'
+    if item.transcription:
+        text += f'  {esc(item.transcription)}'
+    if item.translation:
+        text += f'\n🇷🇺 <tg-spoiler>{esc(item.translation)}</tg-spoiler>'
+    if item.example:
+        text += f'\n\n💬 <i>{esc(item.example)}</i>'
 
     if await _send(bot, user_id, text):
         _positions[user_id] = position + 1

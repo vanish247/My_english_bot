@@ -186,7 +186,8 @@ async def main():
         assert 'просто текст' in t and '&lt;3' in t
         assert database.count_words(UID) == 5
         words = database.get_words(UID)
-        assert 'well-known - известный' in words and 'run - бежать' in words, words
+        pairs = [(w.word, w.translation) for w in words]
+        assert ('well-known', 'известный') in pairs and ('run', 'бежать') in pairs, pairs
     await case('Добавление: дефис/тире/без пробелов/перенос строки, кривые пары, спецсимволы', t_add)
 
     async def t_add_dup():
@@ -215,7 +216,9 @@ async def main():
         texts, _ = await send(msg_update('📋 Мои слова'), 'menu escape')
         assert 'Твой словарь' in texts[-1].text
         texts, _ = await send(msg_update('cow - корова'), 'after escape')
-        assert 'Не понял' in texts[-1].text, 'кнопка меню должна выводить из режима добавления'
+        data = [b.callback_data for row in texts[-1].reply_markup.inline_keyboard for b in row]
+        assert 'add:done' not in data, 'кнопка меню должна выводить из режима добавления'
+        assert 'Добавил 1 слово' in texts[-1].text
     await case('Кнопка меню выводит из режима добавления', t_menu_escape)
 
     async def t_vocab_pages():
@@ -224,15 +227,17 @@ async def main():
         kb = texts[-1].reply_markup.inline_keyboard
         assert kb[0][1].text == '1 / 16', kb[0][1].text
         texts, _ = await send(cb_update('voc:page:15', mid), 'vocab last page')
-        assert '307.' in texts[-1].text
+        assert '308.' in texts[-1].text
         texts, _ = await send(cb_update('voc:page:99', mid), 'vocab bad page')
-        assert '307.' in texts[-1].text
+        assert '308.' in texts[-1].text
         await send(cb_update('noop', mid), 'noop')
-    await case('Словарь по страницам (307 слов → 16 страниц), лишняя страница не ломает', t_vocab_pages)
+    await case('Словарь по страницам (308 слов → 16 страниц), лишняя страница не ломает', t_vocab_pages)
 
     async def t_study_flow():
         database.delete_words(UID)
-        database.add_words(UID, ['apple - яблоко', 'cat - кот', 'dog - собака'])
+        database.add_words(UID, [database.Word('apple', 'яблоко', '/ˈæp.əl/', 'An apple a day.'),
+                                 database.Word('cat', 'кот', '', ''),
+                                 database.Word('dog', 'собака', '', '')])
         texts, _ = await send(msg_update('🎴 Учить'), 'study menu')
         mid = session.next_id
         assert 'Как будем учить' in texts[-1].text and '3 слова' in texts[-1].text, texts[-1].text
@@ -360,8 +365,150 @@ async def main():
         assert database.get_mailing(UID) == 15 and sch.scheduler.get_job(f'mailing_{UID}')
         sch.stop_mailing(UID)
         texts, _ = await send(msg_update('x - y'), 'after done')
-        assert 'Не понял' in texts[-1].text
+        data = [b.callback_data for row in texts[-1].reply_markup.inline_keyboard for b in row]
+        assert 'add:done' not in data, '«Готово» должно завершать режим добавления'
     await case('«Готово» → «Как будем учить?» → включить рассылку прямо оттуда', t_add_done)
+
+    from utils import dictionary as dic
+
+    def kb_data(msg):
+        return [b.callback_data for row in msg.reply_markup.inline_keyboard for b in row]
+
+    def kb_text(msg):
+        return [b.text for row in msg.reply_markup.inline_keyboard for b in row]
+
+    async def t_card_fields():
+        database.delete_words(UID)
+        database.add_words(UID, [database.Word('apple', 'яблоко', '/ˈæp.əl/', 'An apple a day.')])
+        await send(msg_update('🎴 Учить'), 'study menu')
+        mid = session.next_id
+        texts, _ = await send(cb_update('study:cards', mid), 'card')
+        assert '/ˈæp.əl/' in texts[-1].text and 'яблоко' not in texts[-1].text
+        texts, _ = await send(cb_update('study:reveal', mid), 'reveal')
+        assert 'яблоко' in texts[-1].text and 'An apple a day.' in texts[-1].text
+        await send(cb_update('study:stop', mid), 'stop')
+    await case('Карточка: транскрипция спереди, перевод и пример — после «Показать»', t_card_fields)
+
+    async def t_migration():
+        import sqlite3
+        with sqlite3.connect(database.DB) as conn:
+            conn.execute("INSERT INTO words (user_id, word, translation) VALUES (?, 'old - старый', '')", (UID,))
+        database.init_db()
+        assert ('old', 'старый') in [(w.word, w.translation) for w in database.get_words(UID)]
+    await case('Старые слова «apple - яблоко» переносятся в новые поля', t_migration)
+
+    if not dic.available():
+        print('  ⚠️  dictionary.db нет в проекте — тесты словаря пропущены')
+    else:
+        async def t_lookup_found():
+            database.delete_words(UID)
+            texts, _ = await send(msg_update('found'), 'lookup found')
+            mid = session.next_id
+            labels = kb_text(texts[-1])
+            assert any(l.startswith('основывать') for l in labels), labels
+            assert any(l.startswith('находить') and 'от find' in l for l in labels), labels
+            idx = next(i for i, l in enumerate(labels) if l.startswith('находить'))
+            texts, answers = await send(cb_update(f'lk:{idx}', mid), 'pick находить')
+            assert 'Добавил' in texts[-1].text and '✅ находить' in kb_text(texts[-1])[idx]
+            assert ('found', 'находить') in [(w.word, w.translation) for w in database.get_words(UID)]
+            texts, _ = await send(cb_update('lk:0', mid), 'pick основывать')
+            assert len(database.get_words(UID)) == 2, 'второе значение тоже добавляется'
+            _, answers = await send(cb_update(f'lk:{idx}', mid), 'pick again')
+            assert 'уже добавлено' in answers[-1].text
+            await send(cb_update('lk:close', mid), 'close')
+            _, answers = await send(cb_update('lk:0', mid), 'after close')
+            assert answers[-1].show_alert, 'после закрытия кнопки устаревают'
+        await case('Слово «found» → выбор значений (своё и «от find»), можно добавить несколько', t_lookup_found)
+
+        async def t_lookup_phrase():
+            texts, _ = await send(msg_update('Looking For'), 'lookup phrase')
+            assert any(l.startswith('искать') for l in kb_text(texts[-1])), kb_text(texts[-1])
+        await case('Выражение в форме из текста «Looking For» → «искать»', t_lookup_phrase)
+
+        async def t_lookup_own():
+            texts, _ = await send(msg_update('qwertyzz'), 'lookup unknown')
+            mid = session.next_id
+            assert 'Не нашёл' in texts[-1].text and 'lk:own' in kb_data(texts[-1])
+            texts, _ = await send(cb_update('lk:own', mid), 'own')
+            assert 'Напиши перевод' in texts[-1].text
+            texts, _ = await send(msg_update('📋 Мои слова'), 'menu during own')
+            assert 'Твой словарь' in texts[-1].text, 'кнопка меню не должна стать переводом'
+            await send(cb_update('lk:own', mid), 'own again')
+            texts, _ = await send(msg_update('моё слово'), 'own translation')
+            assert 'Добавил' in texts[-1].text
+            assert ('qwertyzz', 'моё слово') in [(w.word, w.translation) for w in database.get_words(UID)]
+            texts, _ = await send(msg_update('ещё текст'), 'after own')
+            assert 'Не понял' in texts[-1].text, 'после своего перевода бот возвращается в обычный режим'
+        await case('Нет в словаре → «Свой перевод»; кнопки меню при этом работают', t_lookup_own)
+
+        async def t_own_in_add_mode():
+            await send(msg_update('/add'), 'add mode')
+            await send(msg_update('zzqqxx'), 'unknown in add mode')
+            await send(cb_update('lk:own', session.next_id), 'own in add')
+            texts, _ = await send(msg_update('перевод'), 'own translation in add')
+            assert 'add:done' in kb_data(texts[-1]), 'после своего перевода остаёмся в режиме добавления'
+            await send(cb_update('add:done', session.next_id), 'done')
+        await case('«Свой перевод» в режиме добавления возвращает в режим добавления', t_own_in_add_mode)
+
+        async def t_extract():
+            database.delete_words(UID)
+            database.add_words(UID, [database.Word('couch', 'диван', '', '')])
+            text = ("I've been looking for my keys all morning and finally found them under the couch. "
+                    "I turned the music off and went to bed.")
+            texts, _ = await send(msg_update(text), 'extract')
+            mid = session.next_id
+            labels = kb_text(texts[-1])
+            assert any('looking for — искать' in l for l in labels), labels
+            assert any('turned off' in l for l in labels) and any('went to bed' in l for l in labels), labels
+            assert not any('couch' in l for l in labels), 'слова из словаря не предлагаются'
+            assert 'уже есть в твоём словаре' in texts[-1].text
+            _, answers = await send(cb_update('tx:add', mid), 'add nothing')
+            assert 'Сначала отметь' in answers[-1].text
+            await send(cb_update('tx:0', mid), 'toggle 0')
+            texts, _ = await send(cb_update('tx:1', mid), 'toggle 1')
+            assert '✅ Добавить (2)' in kb_text(texts[-1])
+            texts, _ = await send(cb_update('tx:add', mid), 'add 2')
+            assert 'Добавил 2 слова' in texts[-1].text, texts[-1].text
+            words = database.get_words(UID)
+            looking = next(w for w in words if w.word == 'looking for')
+            assert looking.translation == 'искать' and 'keys all morning' in looking.example, looking
+            _, answers = await send(cb_update('tx:0', mid), 'after add')
+            assert answers[-1].show_alert
+        await case('Текст → нашёл выражения (и разорванное turned … off), галочки → добавил с примером', t_extract)
+
+        async def t_extract_all_and_simple():
+            texts, _ = await send(msg_update('Tomorrow I will figure out the weekend plan, she said.'), 'extract 2')
+            mid = session.next_id
+            n = sum(1 for d in kb_data(texts[-1]) if d.startswith('tx:') and d[3:].isdigit())
+            texts, _ = await send(cb_update('tx:all', mid), 'select all')
+            assert f'✅ Добавить ({n})' in kb_text(texts[-1])
+            texts, _ = await send(cb_update('tx:cancel', mid), 'cancel')
+            assert 'ничего не добавил' in texts[-1].text
+            texts, _ = await send(msg_update('We like it here, but the old house is small.'), 'only simple words')
+            assert 'Не нашёл в тексте новых слов' in texts[-1].text
+        await case('Текст: «Выбрать все», «Отмена», текст из одних простых слов', t_extract_all_and_simple)
+
+        async def t_caption():
+            uid_counter[0] += 1
+            upd = {'update_id': uid_counter[0], 'message': {
+                'message_id': uid_counter[0], 'date': int(time.time()), 'chat': {'id': UID, 'type': 'private'},
+                'from': user(), 'caption': 'ubiquitous',
+                'photo': [{'file_id': 'x', 'file_unique_id': 'y', 'width': 1, 'height': 1}]}}
+            texts, _ = await send(upd, 'photo with caption')
+            assert any(l.startswith('вездесущий') for l in kb_text(texts[-1]))
+        await case('Пост с картинкой: слово берётся из подписи', t_caption)
+
+    async def t_no_dictionary():
+        saved = dic.DICT_PATH
+        dic.DICT_PATH = 'нет-такого-файла.db'
+        try:
+            texts, _ = await send(msg_update('serendipity'), 'lookup without dictionary')
+            assert 'не подключён' in texts[-1].text and 'lk:own' in kb_data(texts[-1])
+            texts, _ = await send(msg_update('This is a long English text about many things.'), 'text without dict')
+            assert 'не подключён' in texts[-1].text
+        finally:
+            dic.DICT_PATH = saved
+    await case('Без dictionary.db бот не падает и предлагает ввести перевод сам', t_no_dictionary)
 
     sch.scheduler.shutdown(wait=False)
     print(f'\nИТОГ: {passed[0]} прошло, {len(failures)} упало')

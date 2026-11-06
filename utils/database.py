@@ -1,6 +1,12 @@
 import sqlite3
+from collections import namedtuple
+
+from utils.words import split_pair
 
 DB = 'bot_database.db'
+
+# Одно слово из словаря пользователя
+Word = namedtuple('Word', 'word translation transcription example')
 
 
 def init_db():
@@ -27,6 +33,20 @@ def init_db():
         if 'mailing_minutes' not in columns:
             conn.execute('ALTER TABLE users ADD COLUMN mailing_minutes INTEGER DEFAULT 0')
 
+        # Миграция: раньше слово хранилось одной строкой «apple - яблоко»,
+        # теперь слово, перевод, транскрипция и пример — в отдельных колонках
+        columns = [row[1] for row in conn.execute('PRAGMA table_info(words)')]
+        for column in ('translation', 'transcription', 'example'):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE words ADD COLUMN {column} TEXT DEFAULT ''")
+        old_rows = conn.execute(
+            "SELECT id, word FROM words WHERE translation = '' AND word LIKE '%-%'").fetchall()
+        for row_id, text in old_rows:
+            word, translation = split_pair(text)
+            if translation:
+                conn.execute('UPDATE words SET word = ?, translation = ? WHERE id = ?',
+                             (word, translation, row_id))
+
 
 def init_user(user_id: int, username: str):
     """Добавляет пользователя если его ещё нет"""
@@ -38,34 +58,41 @@ def init_user(user_id: int, username: str):
 
 
 def add_words(user_id: int, words: list):
-    """Добавляет слова, пропуская те, что уже есть в словаре.
+    """Добавляет слова (список Word), пропуская те, что уже есть в словаре.
 
+    Повтор — то же слово с тем же переводом: «found — основывать» и
+    «found — находить» — два разных значения, оба добавятся.
     Возвращает (добавленные, повторы).
     """
-    existing = {w.lower() for w in get_words(user_id)}
+    def key(item):
+        return item.word.lower(), item.translation.lower()
+
+    existing = {key(w) for w in get_words(user_id)}
     added, duplicates = [], []
     with sqlite3.connect(DB) as conn:
-        for word in words:
-            if word.lower() in existing:
-                duplicates.append(word)
+        for item in words:
+            if key(item) in existing:
+                duplicates.append(item)
                 continue
             conn.execute(
-                'INSERT INTO words (user_id, word) VALUES (?, ?)',
-                (user_id, word)
+                'INSERT INTO words (user_id, word, translation, transcription, example) '
+                'VALUES (?, ?, ?, ?, ?)',
+                (user_id, item.word, item.translation, item.transcription, item.example)
             )
-            existing.add(word.lower())
-            added.append(word)
+            existing.add(key(item))
+            added.append(item)
     return added, duplicates
 
 
 def get_words(user_id: int) -> list:
-    """Возвращает все слова пользователя в порядке добавления"""
+    """Все слова пользователя (список Word) в порядке добавления"""
     with sqlite3.connect(DB) as conn:
         rows = conn.execute(
-            'SELECT word FROM words WHERE user_id = ? ORDER BY id',
+            'SELECT word, translation, transcription, example FROM words '
+            'WHERE user_id = ? ORDER BY id',
             (user_id,)
         ).fetchall()
-    return [row[0] for row in rows]
+    return [Word(*(value or '' for value in row)) for row in rows]
 
 
 def count_words(user_id: int) -> int:

@@ -1,26 +1,41 @@
-"""Добавление слов: пользователь присылает пары «слово - перевод»."""
+"""Добавление слов.
+
+Боту можно прислать что угодно — он сам поймёт, что это:
+• пары «слово - перевод»   → добавляет как есть;
+• одно слово или выражение → варианты перевода из словаря (handlers/dictionary.py);
+• текст, пост, песню       → находит в нём слова и выражения, отмечаешь нужные.
+
+Работает и в режиме «📚 Добавить слова», и просто из главного меню.
+"""
+import re
+
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from handlers.dictionary import show_extraction, show_lookup
 from handlers.study import study_menu
 from utils import database
-from utils.keyboards import BTN_ADD, add_kb, empty_kb
+from utils.database import Word
+from utils.keyboards import BTN_ADD, add_kb, added_kb, empty_kb, main_menu
 from utils.states import AddWords
 from utils.ui import drop_buttons, show
-from utils.words import esc, parse_words, short, words_count
+from utils.words import esc, has_latin, parse_words, short, words_count
 
 router = Router()
 
 PROMPT = (
     '📚 <b>Добавление слов</b>\n\n'
-    'Пришли пары «слово - перевод» через запятую или каждую с новой строки:\n'
-    '<code>apple - яблоко, fly - летать, go - ходить</code>\n\n'
+    'Пришли мне:\n'
+    '🔤 <b>слово</b> — найду перевод в словаре: <code>ubiquitous</code>\n'
+    '📖 <b>текст</b>, пост или песню — найду в нём слова и выражения\n'
+    '✍️ <b>пары</b> — <code>apple - яблоко, fly - летать</code>\n\n'
     'Можно несколькими сообщениями подряд. Когда закончишь — жми «Готово».'
 )
-
-MAX_SHOWN = 10   # больше не перечисляем, чтобы ответ не превысил лимит Telegram
+NOT_UNDERSTOOD = 'Не понял 🤔 Пришли английское слово, текст или выбери действие в меню 👇'
+SHORT = 4          # до стольких слов без точек — это «слово», длиннее — «текст»
+MAX_SHOWN = 10     # больше не перечисляем, чтобы ответ не превысил лимит Telegram
 
 
 def _bullets(items):
@@ -44,36 +59,58 @@ async def add_from_button(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(AddWords.waiting, F.text)
-async def add_receive(message: Message):
+@router.message(StateFilter(None, AddWords.waiting), F.text | F.caption)
+async def smart_input(message: Message, state: FSMContext):
+    """Определяет, что прислали: пары, слово или текст."""
+    text = (message.text or message.caption or '').strip()
+    adding = await state.get_state() == AddWords.waiting.state
+
+    if text.startswith('/') or not has_latin(text):
+        if adding:
+            await message.answer('Жду английское слово, текст или пары «слово - перевод».\n'
+                                 'Или нажми «Готово».', reply_markup=add_kb)
+        else:
+            await message.answer(NOT_UNDERSTOOD, reply_markup=main_menu)
+        return
+
+    pairs, bad = parse_words(text)
+    if pairs and any(has_latin(word) for word, _ in pairs) and len(pairs) >= len(bad):
+        await _add_pairs(message, pairs, bad, adding)
+    elif len(text.split()) <= SHORT and not re.search(r'[.!?]', text):
+        await show_lookup(message, text)
+    else:
+        await show_extraction(message, text)
+
+
+async def _add_pairs(message: Message, pairs, bad, adding):
     user_id = message.from_user.id
-    pairs, bad = parse_words(message.text)
-    added, duplicates = database.add_words(user_id, pairs) if pairs else ([], [])
+    added, duplicates = database.add_words(user_id, [Word(w, t, '', '') for w, t in pairs])
 
     lines = []
     if added:
         lines.append(f'✅ Добавил {words_count(len(added))}:')
-        lines += _bullets([word.replace(' - ', ' — ') for word in added])
+        lines += _bullets([f'{w.word} — {w.translation}' for w in added])
     if duplicates:
         lines += [''] if lines else []
         lines.append('☑️ Уже были в словаре:')
-        lines += _bullets(duplicates)
+        lines += _bullets([f'{w.word} — {w.translation}' for w in duplicates])
     if bad:
         lines += [''] if lines else []
         lines.append('⚠️ Не понял — между словом и переводом нужен дефис:')
         lines += _bullets(bad)
         lines.append('Пример: <code>apple - яблоко</code>')
 
-    lines += ['', f'📚 В словаре: {words_count(database.count_words(user_id))}',
-              'Присылай ещё или жми «Готово».']
-    await message.answer('\n'.join(lines), reply_markup=add_kb)
+    lines += ['', f'📚 В словаре: {words_count(database.count_words(user_id))}']
+    if adding:
+        lines.append('Присылай ещё или жми «Готово».')
+    await message.answer('\n'.join(lines), reply_markup=add_kb if adding else added_kb)
 
 
 @router.message(AddWords.waiting)
 async def add_not_text(message: Message):
-    """Прислали стикер, фото и т.п. вместо текста."""
-    await message.answer('Жду текст — пары «слово - перевод».\nИли нажми «Готово».',
-                         reply_markup=add_kb)
+    """Прислали стикер, фото без подписи и т.п. вместо текста."""
+    await message.answer('Жду текст: слово, пост или пары «слово - перевод».\n'
+                         'Или нажми «Готово».', reply_markup=add_kb)
 
 
 @router.callback_query(F.data == 'add:done')
