@@ -60,8 +60,10 @@ card_front_kb = inline(
 )
 card_back_kb = inline(
     [('✅ Знаю', 'study:know'), ('🔁 Не знаю', 'study:dontknow')],
+    [('✏️ Исправить', 'study:edit'), ('🗑 Удалить', 'study:delete')],
     [('⏹ Закончить', 'study:stop')],
 )
+edit_cancel_kb = inline([('◀️ Не менять', 'study:edit_cancel')])
 study_done_kb = inline(
     [('🔁 Ещё раз', 'study:cards'), ('◀️ К выбору', 'study:menu')],
 )
@@ -95,6 +97,10 @@ INTERVALS = [
     (180, '3 часа', 'каждые 3 часа'),
 ]
 PHRASES = {minutes: phrase for minutes, _, phrase in INTERVALS}
+
+
+# Под каждым словом рассылки
+mailing_word_kb = inline([('🔕 Остановить', 'mail:stop'), ('⚙️ Как часто', 'mail:settings')])
 
 
 def mailing_kb(current):

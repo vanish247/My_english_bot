@@ -5,8 +5,8 @@ from utils.words import split_pair
 
 DB = 'bot_database.db'
 
-# Одно слово из словаря пользователя
-Word = namedtuple('Word', 'word translation transcription example')
+# Одно слово из словаря пользователя. id — номер в базе (есть у слов, прочитанных из базы)
+Word = namedtuple('Word', 'word translation transcription example id', defaults=(None,))
 
 
 def init_db():
@@ -88,11 +88,24 @@ def get_words(user_id: int) -> list:
     """Все слова пользователя (список Word) в порядке добавления"""
     with sqlite3.connect(DB) as conn:
         rows = conn.execute(
-            'SELECT word, translation, transcription, example FROM words '
+            'SELECT word, translation, transcription, example, id FROM words '
             'WHERE user_id = ? ORDER BY id',
             (user_id,)
         ).fetchall()
-    return [Word(*(value or '' for value in row)) for row in rows]
+    return [Word(*(value or '' for value in row[:4]), id=row[4]) for row in rows]
+
+
+def update_translation(user_id: int, word_id: int, translation: str):
+    """Исправляет перевод одного слова"""
+    with sqlite3.connect(DB) as conn:
+        conn.execute('UPDATE words SET translation = ? WHERE id = ? AND user_id = ?',
+                     (translation, word_id, user_id))
+
+
+def delete_word(user_id: int, word_id: int):
+    """Удаляет одно слово"""
+    with sqlite3.connect(DB) as conn:
+        conn.execute('DELETE FROM words WHERE id = ? AND user_id = ?', (word_id, user_id))
 
 
 def count_words(user_id: int) -> int:

@@ -11,7 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from utils import database
 from utils.keyboards import OLD_BTN_MAILING, PHRASES, empty_kb, mailing_kb
 from utils.scheduler import start_mailing, stop_mailing
-from utils.ui import show
+from utils.ui import drop_buttons, show
 
 router = Router()
 
@@ -43,6 +43,23 @@ async def mailing_from_command(message: Message, state: FSMContext):
 async def mailing_from_study_menu(callback: CallbackQuery):
     text, kb = _screen(callback.from_user.id)
     await show(callback, text, kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'mail:stop')
+async def mailing_stop_from_word(callback: CallbackQuery):
+    """«🔕 Остановить» под словом рассылки."""
+    stop_mailing(callback.from_user.id)
+    await drop_buttons(callback)
+    await callback.answer('🔕 Рассылка остановлена. Включить снова: 🎴 Учить → По расписанию',
+                          show_alert=True)
+
+
+@router.callback_query(F.data == 'mail:settings')
+async def mailing_settings_from_word(callback: CallbackQuery):
+    """«⚙️ Как часто» под словом рассылки — экран рассылки отдельным сообщением."""
+    text, kb = _screen(callback.from_user.id)
+    await callback.bot.send_message(callback.from_user.id, text, reply_markup=kb)
     await callback.answer()
 
 

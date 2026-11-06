@@ -14,3 +14,4 @@ class AddWords(StatesGroup):
 
 class Study(StatesGroup):
     card = State()      # идёт тренировка по карточкам
+    edit = State()      # ждём исправленный перевод для карточки

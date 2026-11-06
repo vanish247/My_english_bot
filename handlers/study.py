@@ -17,10 +17,11 @@ from aiogram.types import CallbackQuery, Message
 
 from utils import database
 from utils.keyboards import (
-    BTN_STUDY, PHRASES, card_back_kb, card_front_kb, empty_kb, study_done_kb, study_menu_kb,
+    BTN_STUDY, MENU_BUTTONS, PHRASES, card_back_kb, card_front_kb, edit_cancel_kb, empty_kb,
+    study_done_kb, study_menu_kb,
 )
 from utils.states import Study
-from utils.ui import show
+from utils.ui import drop_buttons, show
 from utils.database import Word
 from utils.words import esc, words_count
 
@@ -162,3 +163,71 @@ async def stop(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await show(callback, _summary(data, finished=False), study_done_kb)
     await callback.answer()
+
+
+# ─── Исправить или удалить слово прямо в карточке ──────────
+
+@router.callback_query(Study.card, F.data == 'study:edit')
+async def edit_start(callback: CallbackQuery, state: FSMContext):
+    data = await _session(callback, state)
+    if data is None:
+        return
+    item = Word(*data['cards'][data['pos']])
+    await state.set_state(Study.edit)            # данные тренировки сохраняются
+    await callback.bot.send_message(
+        callback.from_user.id,
+        f'✏️ Напиши правильный перевод для «<b>{esc(item.word)}</b>»\n'
+        f'Сейчас: {esc(item.translation) if item.translation else "—"}',
+        reply_markup=edit_cancel_kb)
+    await callback.answer()
+
+
+@router.message(Study.edit, F.text, ~F.text.in_(MENU_BUTTONS), ~F.text.startswith('/'))
+async def edit_save(message: Message, state: FSMContext):
+    data = await state.get_data()
+    user_id = message.from_user.id
+    item = Word(*data['cards'][data['pos']])
+    translation = ' '.join(message.text.split())[:100]
+    database.update_translation(user_id, item.id, translation)
+    data['cards'][data['pos']] = tuple(item._replace(translation=translation))
+
+    # Старую карточку закрываем, исправленную присылаем вниз — продолжать удобнее
+    try:
+        await message.bot.edit_message_reply_markup(
+            chat_id=user_id, message_id=data['message_id'], reply_markup=None)
+    except Exception:
+        pass
+    sent = await message.answer('✅ Перевод исправлен\n\n' + _card(data, revealed=True),
+                                reply_markup=card_back_kb)
+    data['message_id'] = sent.message_id
+    await state.set_state(Study.card)
+    await state.set_data(data)
+
+
+@router.message(Study.edit, ~F.text.in_(MENU_BUTTONS))
+async def edit_not_text(message: Message):
+    await message.answer('Напиши перевод текстом 🙂', reply_markup=edit_cancel_kb)
+
+
+@router.callback_query(F.data == 'study:edit_cancel')
+async def edit_cancel(callback: CallbackQuery, state: FSMContext):
+    if await state.get_state() == Study.edit.state:
+        await state.set_state(Study.card)
+    await drop_buttons(callback)
+    await callback.answer('Оставил как было')
+
+
+@router.callback_query(Study.card, F.data == 'study:delete')
+async def delete_card(callback: CallbackQuery, state: FSMContext):
+    data = await _session(callback, state)
+    if data is None:
+        return
+    item = Word(*data['cards'].pop(data['pos']))
+    database.delete_word(callback.from_user.id, item.id)
+
+    if data['pos'] >= len(data['cards']):        # это была последняя карточка
+        await state.clear()
+        await show(callback, _summary(data, finished=True), study_done_kb)
+    else:
+        await _show_card(callback, state, data, revealed=False)
+    await callback.answer(f'🗑 Удалил «{item.word}» из словаря')

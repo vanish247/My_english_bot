@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramForbiddenError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from utils import database
+from utils.keyboards import mailing_word_kb
 from utils.words import esc
 
 log = logging.getLogger(__name__)
@@ -45,13 +46,13 @@ async def send_next_word(bot: Bot, user_id: int):
     if item.example:
         text += f'\n\n💬 <i>{esc(item.example)}</i>'
 
-    if await _send(bot, user_id, text):
+    if await _send(bot, user_id, text, mailing_word_kb):
         _positions[user_id] = position + 1
 
 
-async def _send(bot: Bot, user_id: int, text: str) -> bool:
+async def _send(bot: Bot, user_id: int, text: str, reply_markup=None) -> bool:
     try:
-        await bot.send_message(user_id, text)
+        await bot.send_message(user_id, text, reply_markup=reply_markup)
         return True
     except TelegramForbiddenError:
         # Пользователь заблокировал бота — слать дальше бессмысленно

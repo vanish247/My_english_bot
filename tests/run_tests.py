@@ -369,6 +369,74 @@ async def main():
         assert 'add:done' not in data, '«Готово» должно завершать режим добавления'
     await case('«Готово» → «Как будем учить?» → включить рассылку прямо оттуда', t_add_done)
 
+    def cb_list(msg):
+        return [b.callback_data for row in msg.reply_markup.inline_keyboard for b in row]
+
+    async def t_mailing_buttons():
+        database.delete_words(UID)
+        database.add_words(UID, [database.Word('apple', 'яблоко', '', '')])
+        sch.start_mailing(bot, UID, 5)
+        before = len(session.calls)
+        await sch.send_next_word(bot, UID)
+        sent = session.calls[before:][-1]
+        assert cb_list(sent) == ['mail:stop', 'mail:settings'], cb_list(sent)
+        word_msg = session.next_id
+        texts, _ = await send(cb_update('mail:settings', word_msg), 'mailing settings from word')
+        assert 'Учить по расписанию' in texts[-1].text and 'включена' in texts[-1].text
+        _, answers = await send(cb_update('mail:stop', word_msg), 'stop from word')
+        assert answers[-1].show_alert and 'остановлена' in answers[-1].text
+        assert sch.scheduler.get_job(f'mailing_{UID}') is None and database.get_mailing(UID) == 0
+    await case('Под словом рассылки кнопки «Остановить» и «Как часто»', t_mailing_buttons)
+
+    async def start_cards(words):
+        database.delete_words(UID)
+        database.add_words(UID, [database.Word(w, t, '', '') for w, t in words])
+        await send(msg_update('🎴 Учить'), 'study menu')
+        mid = session.next_id
+        await send(cb_update('study:cards', mid), 'cards')
+        return mid
+
+    async def t_card_edit():
+        mid = await start_cards([('found', 'основывать')])
+        texts, _ = await send(cb_update('study:reveal', mid), 'reveal')
+        assert 'study:edit' in cb_list(texts[-1]) and 'study:delete' in cb_list(texts[-1])
+        texts, _ = await send(cb_update('study:edit', mid), 'edit')
+        assert 'Напиши правильный перевод' in texts[-1].text and 'основывать' in texts[-1].text
+        texts, _ = await send(msg_update('нашёл'), 'new translation')
+        assert 'Перевод исправлен' in texts[-1].text and 'нашёл' in texts[-1].text
+        assert [w.translation for w in database.get_words(UID)] == ['нашёл']
+        new_card = session.next_id
+        texts, _ = await send(cb_update('study:know', new_card), 'know after edit')
+        assert 'завершена' in texts[-1].text and 'Знаю: 1' in texts[-1].text
+    await case('Карточка: «Исправить» → новый перевод сохраняется, тренировка продолжается', t_card_edit)
+
+    async def t_card_edit_cancel_and_menu():
+        mid = await start_cards([('apple', 'яблоко'), ('cat', 'кот')])
+        await send(cb_update('study:reveal', mid), 'reveal')
+        await send(cb_update('study:edit', mid), 'edit')
+        prompt = session.next_id
+        _, answers = await send(cb_update('study:edit_cancel', prompt), 'cancel edit')
+        assert 'Оставил' in answers[-1].text
+        texts, _ = await send(cb_update('study:know', mid), 'continue after cancel')
+        assert 'Карточка 2 из 2' in texts[-1].text
+        await send(cb_update('study:reveal', mid), 'reveal 2')
+        await send(cb_update('study:edit', mid), 'edit 2')
+        texts, _ = await send(msg_update('📋 Мои слова'), 'menu during edit')
+        assert 'Твой словарь' in texts[-1].text, 'кнопка меню не должна стать переводом'
+        assert {w.translation for w in database.get_words(UID)} == {'яблоко', 'кот'}
+    await case('«Не менять» и кнопки меню во время исправления', t_card_edit_cancel_and_menu)
+
+    async def t_card_delete():
+        mid = await start_cards([('apple', 'яблоко'), ('cat', 'кот')])
+        await send(cb_update('study:reveal', mid), 'reveal')
+        texts, answers = await send(cb_update('study:delete', mid), 'delete first')
+        assert 'Удалил' in answers[-1].text and 'Карточка 1 из 1' in texts[-1].text
+        assert database.count_words(UID) == 1
+        await send(cb_update('study:reveal', mid), 'reveal last')
+        texts, _ = await send(cb_update('study:delete', mid), 'delete last')
+        assert 'завершена' in texts[-1].text and database.count_words(UID) == 0
+    await case('Карточка: «Удалить» убирает слово и показывает следующее', t_card_delete)
+
     from utils import dictionary as dic
 
     def kb_data(msg):
