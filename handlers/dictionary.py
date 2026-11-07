@@ -76,7 +76,7 @@ def _lookup_view(data):
 
 async def show_lookup(message: Message, text):
     """Экран «Выбери значение» для слова или короткого выражения."""
-    word = ' '.join(text.split())[:60]
+    word = dictionary.normalize_case(text)[:60]
     options = dictionary.meanings(word)
     data = {'kind': 'lookup', 'word': word, 'options': options,
             'ipa': options[0].ipa if options else '', 'added': [], 'total': 0}

@@ -588,6 +588,40 @@ async def main():
             assert any(l.startswith('вездесущий') for l in kb_text(texts[-1]))
         await case('Пост с картинкой: слово берётся из подписи', t_caption)
 
+    async def t_lowercase():
+        database.delete_words(UID)
+        await send(msg_update('Apple - Яблоко, CAT - кот'), 'pairs with capitals')
+        words = {w.word for w in database.get_words(UID)}
+        assert words == {'apple', 'cat'}, words
+        await send(msg_update('apple - яблоко'), 'same word lowercase')
+        assert database.count_words(UID) == 2, 'Apple и apple — одно слово'
+        if dic.available():
+            await send(msg_update('London - Лондон'), 'proper noun')
+            assert 'London' in {w.word for w in database.get_words(UID)}, 'имена собственные — с заглавной'
+            texts, _ = await send(msg_update('Tomorrow'), 'lookup capitalized')
+            assert '<b>tomorrow</b>' in texts[-1].text
+            await send(cb_update('lk:0', session.next_id), 'pick')
+            assert 'tomorrow' in {w.word for w in database.get_words(UID)}
+    await case('Слова сохраняются маленькими буквами, кроме имён собственных (London)', t_lowercase)
+
+    async def t_lowercase_migration():
+        import sqlite3
+        database.delete_words(UID)
+        with sqlite3.connect(database.DB) as conn:
+            conn.executemany("INSERT INTO words (user_id, word, translation) VALUES (?, ?, ?)",
+                             [(UID, 'Dog', 'собака'), (UID, 'dog', 'собака'), (UID, 'Bird', 'птица')])
+        database.init_db()
+        assert sorted((w.word, w.translation) for w in database.get_words(UID)) == \
+            [('bird', 'птица'), ('dog', 'собака')], database.get_words(UID)
+    await case('Уже добавленные слова переводятся в нижний регистр, дубли склеиваются', t_lowercase_migration)
+
+    async def t_no_archaic():
+        if not dic.available():
+            return
+        assert dic.meanings('art')[0].translation == 'искусство'
+        assert all(i.translation != 'быть' for i in dic.extract('I am interested in art.'))
+    await case('Старинные формы не мешают: art → искусство, а не «быть» (thou art)', t_no_archaic)
+
     async def t_no_dictionary():
         saved = dic.DICT_PATH
         dic.DICT_PATH = 'нет-такого-файла.db'

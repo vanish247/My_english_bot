@@ -1,6 +1,7 @@
 import sqlite3
 from collections import namedtuple
 
+from utils.dictionary import normalize_case
 from utils.words import split_pair
 
 DB = 'bot_database.db'
@@ -47,6 +48,14 @@ def init_db():
                 conn.execute('UPDATE words SET word = ?, translation = ? WHERE id = ?',
                              (word, translation, row_id))
 
+        # Слова — маленькими буквами (кроме имён собственных), дубли после этого убираем
+        for row_id, word in conn.execute('SELECT id, word FROM words').fetchall():
+            fixed = normalize_case(word)
+            if fixed != word:
+                conn.execute('UPDATE words SET word = ? WHERE id = ?', (fixed, row_id))
+        conn.execute('DELETE FROM words WHERE id NOT IN '
+                     '(SELECT MIN(id) FROM words GROUP BY user_id, word, translation)')
+
 
 def init_user(user_id: int, username: str):
     """Добавляет пользователя если его ещё нет"""
@@ -71,6 +80,7 @@ def add_words(user_id: int, words: list):
     added, duplicates = [], []
     with sqlite3.connect(DB) as conn:
         for item in words:
+            item = item._replace(word=normalize_case(item.word))   # Tomorrow → tomorrow
             if key(item) in existing:
                 duplicates.append(item)
                 continue

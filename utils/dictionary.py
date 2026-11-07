@@ -76,11 +76,16 @@ def _example(entry_id):
     return row[0] if row else ''
 
 
+# Старинные формы на «thou» (thou art, thou hast) — второе лицо единственного числа.
+# Без этого фильтра «art» считалось бы формой «be» и переводилось как «быть».
+NOT_ARCHAIC = "NOT (tags LIKE '%second-person%' AND tags LIKE '%singular%')"
+
+
 @lru_cache(maxsize=20000)
 def _lemmas(word_lc):
     """Словарные формы: found → find, keys → key."""
     return [row[0] for row in _db().execute(
-        'SELECT DISTINCT lemma_lc FROM forms WHERE form_lc = ?', (word_lc,))]
+        f'SELECT DISTINCT lemma_lc FROM forms WHERE form_lc = ? AND {NOT_ARCHAIC}', (word_lc,))]
 
 
 @lru_cache(maxsize=20000)
@@ -112,11 +117,33 @@ def _form_tags(form_lc, lemma_lc):
     есть тег «past, plural» (we went) — это не «очереди» во множественном числе.
     """
     verb, noun = set(), set()
-    for (row,) in _db().execute('SELECT tags FROM forms WHERE form_lc = ? AND lemma_lc = ?',
+    for (row,) in _db().execute(f'SELECT tags FROM forms WHERE form_lc = ? AND lemma_lc = ? AND {NOT_ARCHAIC}',
                                 (form_lc, lemma_lc)):
         tags = {t for t in (row or '').split(',') if t}
         (verb if tags & VERB_TAGS else noun).update(tags)
     return frozenset(verb), frozenset(noun)
+
+
+@lru_cache(maxsize=20000)
+def _headwords(word_lc):
+    return [row[0] for row in _db().execute(
+        'SELECT DISTINCT word FROM entries WHERE word_lc = ?', (word_lc,))]
+
+
+def normalize_case(text):
+    """Как записать слово в словарь: маленькими буквами, кроме имён собственных.
+
+    Tomorrow → tomorrow, Looking For → looking for. А London, June, Monday —
+    как в словаре: если там есть только вариант с заглавной, берём его.
+    """
+    text = ' '.join(text.split())
+    lower = text.lower()
+    if lower and available():
+        _db()
+        heads = _headwords(lower)
+        if heads and lower not in heads:
+            return heads[0]
+    return lower
 
 
 def _phrase_keys(words):
@@ -219,7 +246,7 @@ def extract(text):
         options = _translations(sources, 1)
         if options:
             found.append((tokens[first].start(), Found(
-                shown, options[0].translation, options[0].ipa,
+                normalize_case(shown), options[0].translation, options[0].ipa,
                 _sentence_of(text, tokens[first].start()))))
 
     # 1. Выражения из 4, 3, 2 слов подряд: «looking forward to», «put up with», «went to bed»

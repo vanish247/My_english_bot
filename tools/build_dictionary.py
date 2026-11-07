@@ -169,7 +169,9 @@ def main(src, dst):
                 fw = (form.get('form') or '').strip().lower()
                 tags = form.get('tags') or []
                 if fw and fw != word_lc and WORD_RE.match(fw) and ' ' not in fw \
-                        and INFLECTION_TAGS & set(tags):
+                        and INFLECTION_TAGS & set(tags) \
+                        and not {'second-person', 'singular'} <= set(tags) \
+                        and not {'archaic', 'obsolete', 'dialectal'} & set(tags):   # thou art, hast
                     pending_forms.append((fw, word_lc, ','.join(tags[:3])))
 
             groups = order_translations(ru_translations(rec), first_gloss(rec))
