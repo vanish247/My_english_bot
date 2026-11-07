@@ -22,6 +22,7 @@
 """
 import gzip
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -126,6 +127,31 @@ def ipa(rec):
     return ''
 
 
+PHRASES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'phrases.txt')
+
+
+def load_phrases(db):
+    """Свои сочетания с предлогами (tools/data/phrases.txt).
+
+    Записываются в базу раньше Wiktionary, поэтому у них меньшие номера, и бот
+    предлагает их первыми: «look at» → «смотреть на», а не редкое «светить».
+    """
+    count = 0
+    with open(PHRASES_FILE, encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            phrase, pos, translation = (part.strip() for part in line.split('|'))
+            cur = db.execute(
+                'INSERT INTO entries (word, word_lc, pos, ipa, zipf, is_phrase, gloss) VALUES (?,?,?,?,?,?,?)',
+                (phrase, phrase.lower(), pos, '', zipf_frequency(phrase.lower(), 'en'),
+                 int(' ' in phrase), translation))
+            db.execute('INSERT INTO translations VALUES (?,?,?)', (cur.lastrowid, '', translation))
+            count += 1
+    print(f'  свои сочетания: {count}', flush=True)
+
+
 def main(src, dst):
     db = sqlite3.connect(dst)
     db.executescript('''
@@ -139,6 +165,7 @@ def main(src, dst):
         CREATE TABLE forms (form_lc TEXT, lemma_lc TEXT, tags TEXT, zipf REAL);
     ''')
 
+    load_phrases(db)
     started = time.time()
     seen = kept = phrases = 0
     pending_forms = []

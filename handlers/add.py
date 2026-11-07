@@ -16,7 +16,7 @@ from aiogram.types import CallbackQuery, Message
 
 from handlers.dictionary import show_extraction, show_lookup
 from handlers.study import study_menu
-from utils import database
+from utils import database, dictionary
 from utils.database import Word
 from utils.keyboards import BTN_ADD, add_kb, added_kb, empty_kb, main_menu
 from utils.states import AddWords
@@ -36,6 +36,19 @@ PROMPT = (
 NOT_UNDERSTOOD = 'Не понял 🤔 Пришли английское слово, текст или выбери действие в меню 👇'
 SHORT = 4          # до стольких слов без точек — это «слово», длиннее — «текст»
 MAX_SHOWN = 10     # больше не перечисляем, чтобы ответ не превысил лимит Telegram
+
+
+def _as_one_word(text):
+    """Показать как одно слово (экран «Выбери значение») или разобрать по частям?
+
+    Одно слово — всегда как слово. Короткая фраза — как слово, только если она
+    есть в словаре целиком («look for»). Иначе — по частям, как текст:
+    «waiting for people to» → нашёл «waiting for». «Не нашёл» — только если
+    по частям тоже ничего нет.
+    """
+    if len(text.split()) == 1 or not dictionary.available():
+        return True
+    return bool(dictionary.meanings(text)) or not dictionary.extract(text)
 
 
 def _bullets(items):
@@ -76,7 +89,7 @@ async def smart_input(message: Message, state: FSMContext):
     pairs, bad = parse_words(text)
     if pairs and any(has_latin(word) for word, _ in pairs) and len(pairs) >= len(bad):
         await _add_pairs(message, pairs, bad, adding)
-    elif len(text.split()) <= SHORT and not re.search(r'[.!?]', text):
+    elif len(text.split()) <= SHORT and not re.search(r'[.!?]', text) and _as_one_word(text):
         await show_lookup(message, text)
     else:
         await show_extraction(message, text)

@@ -183,8 +183,10 @@ def _translations(sources, limit):
     for key, note, tags in sources:
         verb_tags, noun_tags = tags or (frozenset(), frozenset())
         for entry_id, _, pos, ipa in _entries(key):
-            # «went» — форма глагола: существительное go («очередь») не предлагаем
-            if tags is not None and not ((pos == 'verb' and verb_tags) or (pos == 'noun' and noun_tags)):
+            # «went» — форма глагола: существительное go («очередь») не предлагаем.
+            # Только для отдельных слов: у выражений («has to» → have to) часть речи любая
+            if tags is not None and ' ' not in key and \
+                    not ((pos == 'verb' and verb_tags) or (pos == 'noun' and noun_tags)):
                 continue
             form = verb_tags if pos == 'verb' else noun_tags if pos == 'noun' else frozenset()
             example = _example(entry_id)

@@ -1,0 +1,423 @@
+# Сочетания с предлогами и устойчивые выражения, которых нет (или они плохо переведены) в Wiktionary.
+#
+# Формат строки:   фраза | часть речи | перевод (подсказка, что идёт дальше)
+#   часть речи:  verb — бот поставит перевод в форму слова (waited for → ждал, depends on → зависит от)
+#                noun — множественное число (reasons for → причины)
+#                adj, phrase — перевод не меняется
+#
+# Эти записи важнее записей из Wiktionary: бот предлагает их первыми.
+# Добавил строку → пересобери словарь (tools/build_dictionary.py) и залей dictionary.db на сервер.
+
+# ─── Глагол + предлог ────────────────────────────────────────────────
+account for | verb | объяснять (что-то); составлять (долю)
+accuse of | verb | обвинять (кого-то) в
+adapt to | verb | приспосабливаться к
+add to | verb | добавлять к
+admit to | verb | признаваться в
+agree on | verb | договориться о
+agree to | verb | соглашаться на (что-то)
+agree with | verb | соглашаться с (кем-то)
+aim at | verb | целиться в; быть направленным на
+allow for | verb | учитывать (что-то)
+amount to | verb | составлять (сумму); сводиться к
+apologise for | verb | извиняться за
+apologize for | verb | извиняться за
+appeal to | verb | обращаться к; нравиться (кому-то)
+apply for | verb | подавать заявку на
+apply to | verb | относиться к; обращаться в
+approve of | verb | одобрять (что-то)
+argue about | verb | спорить о
+argue with | verb | спорить с (кем-то)
+arrive at | verb | прибывать в (место); приходить к (выводу)
+arrive in | verb | прибывать в (город, страну)
+ask about | verb | спрашивать о
+ask for | verb | просить (что-то)
+attend to | verb | заниматься (чем-то); обслуживать (кого-то)
+believe in | verb | верить в
+belong to | verb | принадлежать (кому-то)
+benefit from | verb | получать пользу от
+blame for | verb | винить (кого-то) за
+borrow from | verb | брать взаймы у
+bump into | verb | натыкаться на (кого-то)
+burst into | verb | врываться в; разражаться (смехом, слезами)
+call for | verb | требовать (чего-то); заходить за (кем-то)
+care about | verb | беспокоиться о; быть небезразличным
+care for | verb | ухаживать за; любить
+catch up with | verb | догонять (кого-то)
+charge for | verb | брать плату за
+cheat on | verb | изменять (кому-то)
+choose between | verb | выбирать между
+come across | verb | натыкаться на; случайно находить
+come from | verb | быть родом из; происходить от
+come up with | verb | придумывать (что-то)
+comment on | verb | комментировать (что-то)
+communicate with | verb | общаться с
+compare to | verb | сравнивать с
+compare with | verb | сравнивать с
+compete with | verb | соревноваться с
+complain about | verb | жаловаться на (что-то)
+complain to | verb | жаловаться (кому-то)
+concentrate on | verb | сосредоточиваться на
+congratulate on | verb | поздравлять с
+consist of | verb | состоять из
+contribute to | verb | вносить вклад в
+cope with | verb | справляться с
+count on | verb | рассчитывать на
+cover with | verb | покрывать (чем-то)
+deal with | verb | иметь дело с; справляться с
+decide on | verb | выбирать (что-то); решаться на
+depend on | verb | зависеть от
+depend upon | verb | зависеть от
+devote to | verb | посвящать (чему-то)
+die of | verb | умирать от (болезни)
+differ from | verb | отличаться от
+disagree with | verb | не соглашаться с
+divide into | verb | делить на
+dream about | verb | мечтать о; видеть во сне
+dream of | verb | мечтать о
+dress in | verb | одеваться в
+end in | verb | заканчиваться (чем-то)
+engage in | verb | заниматься (чем-то)
+escape from | verb | сбегать из
+explain to | verb | объяснять (кому-то)
+feel like | verb | хотеть (чего-то); чувствовать себя (кем-то)
+fight against | verb | бороться против
+fight for | verb | бороться за
+fill with | verb | наполнять (чем-то)
+focus on | verb | сосредоточиваться на
+forgive for | verb | прощать (кого-то) за
+get along with | verb | ладить с (кем-то)
+get on with | verb | ладить с (кем-то); продолжать (дело)
+get over | verb | преодолевать; оправляться от
+get rid of | verb | избавляться от
+get to | verb | добираться до
+get used to | verb | привыкать к
+go through | verb | переживать (трудности); просматривать
+go with | verb | подходить к; сочетаться с
+graduate from | verb | оканчивать (учебное заведение)
+hang on to | verb | держаться за
+happen to | verb | случаться с (кем-то)
+head for | verb | направляться в
+hear about | verb | слышать о
+hear from | verb | получать известия от
+hear of | verb | слышать о (существовании)
+help with | verb | помогать с (чем-то)
+hide from | verb | прятаться от
+hope for | verb | надеяться на
+insist on | verb | настаивать на
+interfere with | verb | мешать (чему-то); вмешиваться в
+introduce to | verb | знакомить с; представлять (кому-то)
+invest in | verb | вкладывать в
+invite to | verb | приглашать на (куда-то)
+joke about | verb | шутить о
+keep from | verb | удерживать от
+keep up with | verb | не отставать от
+knock on | verb | стучать в
+know about | verb | знать о
+laugh at | verb | смеяться над
+lead to | verb | приводить к
+lean on | verb | опираться на
+learn about | verb | узнавать о
+learn from | verb | учиться на (ошибках); учиться у
+lie to | verb | лгать (кому-то)
+listen to | verb | слушать (кого-то, что-то)
+live on | verb | жить на (деньги); питаться (чем-то)
+long for | verb | тосковать по
+look after | verb | присматривать за; заботиться о
+look at | verb | смотреть на
+look down on | verb | смотреть свысока на
+look for | verb | искать (кого-то, что-то)
+look forward to | verb | ждать с нетерпением
+look into | verb | изучать, расследовать
+look like | verb | выглядеть как; быть похожим на
+look through | verb | просматривать
+look up to | verb | уважать; равняться на
+major in | verb | специализироваться по (в вузе)
+make fun of | verb | высмеивать (кого-то)
+mistake for | verb | принимать (кого-то) за
+object to | verb | возражать против
+operate on | verb | оперировать (кого-то)
+participate in | verb | участвовать в
+pay attention to | verb | обращать внимание на
+pay for | verb | платить за
+plan on | verb | планировать (что-то)
+point at | verb | указывать на
+pray for | verb | молиться за
+prepare for | verb | готовиться к
+prevent from | verb | мешать (кому-то сделать), не давать
+protect from | verb | защищать от
+provide with | verb | обеспечивать (кого-то чем-то)
+punish for | verb | наказывать за
+put up with | verb | терпеть (кого-то, что-то)
+reach for | verb | тянуться за
+react to | verb | реагировать на
+recover from | verb | оправляться от; выздоравливать после
+refer to | verb | ссылаться на; иметь в виду
+rely on | verb | полагаться на
+remind of | verb | напоминать (кому-то) о
+reply to | verb | отвечать на (письмо, сообщение)
+respond to | verb | отвечать на; реагировать на
+result from | verb | быть результатом (чего-то)
+result in | verb | приводить к
+retire from | verb | уходить на пенсию с
+run away from | verb | убегать от
+run into | verb | случайно встречать; врезаться в
+run out of | verb | израсходовать; заканчиваться (у кого-то)
+save from | verb | спасать от
+search for | verb | искать (что-то)
+send to | verb | посылать (кому-то, куда-то)
+shout at | verb | кричать на
+smile at | verb | улыбаться (кому-то)
+specialise in | verb | специализироваться на
+specialize in | verb | специализироваться на
+spend on | verb | тратить на
+stare at | verb | пристально смотреть на
+succeed in | verb | преуспевать в
+suffer from | verb | страдать от
+take care of | verb | заботиться о
+take part in | verb | участвовать в
+talk about | verb | говорить о
+talk to | verb | разговаривать с (кем-то)
+talk with | verb | разговаривать с (кем-то)
+thank for | verb | благодарить за
+think about | verb | думать о
+think of | verb | думать о; придумывать
+throw at | verb | бросать в (кого-то)
+translate into | verb | переводить на (язык)
+travel to | verb | ездить в; путешествовать в
+trust in | verb | доверять (кому-то); верить в
+turn into | verb | превращаться в
+vote for | verb | голосовать за
+wait for | verb | ждать (кого-то, что-то)
+warn about | verb | предупреждать о
+warn against | verb | предостерегать от
+work for | verb | работать на (кого-то, компанию)
+work on | verb | работать над
+worry about | verb | беспокоиться о
+write about | verb | писать о
+write to | verb | писать (кому-то)
+
+# ─── Глагол + to + действие ──────────────────────────────────────────
+afford to | verb | позволять себе (сделать)
+decide to | verb | решать (сделать)
+expect to | verb | рассчитывать (сделать)
+forget to | verb | забывать (сделать)
+going to | phrase | собираться (сделать)
+have to | phrase | должен, приходится (сделать)
+hope to | verb | надеяться (сделать)
+intend to | verb | намереваться (сделать)
+learn to | verb | учиться (делать)
+manage to | verb | суметь (сделать)
+need to | phrase | нужно, надо (сделать)
+offer to | verb | предлагать (сделать)
+plan to | verb | планировать (сделать)
+pretend to | verb | притворяться (что делаешь)
+promise to | verb | обещать (сделать)
+refuse to | verb | отказываться (делать)
+remember to | verb | не забывать (сделать)
+seem to | verb | казаться (что-то делающим)
+tend to | verb | быть склонным (делать)
+try to | verb | пытаться (сделать)
+used to | phrase | раньше (делал); привыкший к
+want to | verb | хотеть (сделать)
+would like to | phrase | хотел бы (сделать)
+
+# ─── Прилагательное + предлог ────────────────────────────────────────
+absent from | adj | отсутствующий (где-то)
+accustomed to | adj | привыкший к
+addicted to | adj | зависимый от
+afraid of | adj | бояться (чего-то)
+amazed at | adj | поражённый (чем-то)
+amazed by | adj | поражённый (чем-то)
+angry about | adj | злой из-за (чего-то)
+angry with | adj | злой на (кого-то)
+annoyed with | adj | раздражённый (кем-то)
+anxious about | adj | тревожащийся о
+ashamed of | adj | стыдиться (чего-то)
+aware of | adj | знающий о; осознающий
+bad at | adj | плохо умеющий (что-то)
+bored with | adj | скучающий от (чего-то)
+busy with | adj | занятый (чем-то)
+capable of | adj | способный на
+careful with | adj | осторожный с
+certain about | adj | уверенный в
+close to | adj | близкий к; рядом с
+confident in | adj | уверенный в
+confused about | adj | запутавшийся в (чём-то)
+connected to | adj | связанный с
+conscious of | adj | осознающий (что-то)
+crazy about | adj | без ума от
+critical of | adj | критически относящийся к
+curious about | adj | любопытствующий насчёт
+dependent on | adj | зависящий от
+different from | adj | отличающийся от
+disappointed in | adj | разочарованный в (ком-то)
+disappointed with | adj | разочарованный (чем-то)
+engaged to | adj | помолвленный с
+envious of | adj | завидующий (кому-то)
+equal to | adj | равный (чему-то)
+excited about | adj | в восторге от
+experienced in | adj | опытный в
+familiar with | adj | знакомый с
+famous for | adj | знаменитый (чем-то)
+fed up with | adj | сытый по горло (чем-то)
+fond of | adj | любящий (что-то), неравнодушный к
+friendly to | adj | дружелюбный к
+frightened of | adj | бояться (чего-то)
+full of | adj | полный (чего-то)
+furious with | adj | в ярости на (кого-то)
+generous to | adj | щедрый к
+good at | adj | хорошо умеющий (что-то)
+good for | adj | полезный для
+grateful for | adj | благодарный за
+grateful to | adj | благодарный (кому-то)
+guilty of | adj | виновный в
+happy about | adj | довольный (чем-то)
+happy with | adj | довольный (чем-то)
+harmful to | adj | вредный для
+honest with | adj | честный с
+impressed by | adj | впечатлённый (чем-то)
+impressed with | adj | впечатлённый (чем-то)
+independent of | adj | независимый от
+interested in | adj | интересующийся (чем-то)
+involved in | adj | вовлечённый в
+jealous of | adj | ревнующий к; завидующий (кому-то)
+keen on | adj | увлекающийся (чем-то)
+kind to | adj | добрый к
+known for | adj | известный (чем-то)
+late for | adj | опоздавший на
+limited to | adj | ограниченный (чем-то)
+mad about | adj | без ума от
+married to | adj | женатый на; замужем за
+nervous about | adj | нервничающий из-за
+nice to | adj | милый с (кем-то)
+obsessed with | adj | помешанный на
+opposed to | adj | выступающий против
+pleased with | adj | довольный (чем-то)
+polite to | adj | вежливый с
+popular with | adj | популярный среди
+positive about | adj | позитивно настроенный насчёт
+proud of | adj | гордиться (чем-то)
+qualified for | adj | подходящий по квалификации для
+ready for | adj | готовый к
+related to | adj | связанный с; родственный (кому-то)
+relevant to | adj | имеющий отношение к
+responsible for | adj | ответственный за
+rich in | adj | богатый (чем-то)
+rude to | adj | грубый с
+sad about | adj | грустный из-за
+safe from | adj | защищённый от
+satisfied with | adj | удовлетворённый (чем-то)
+scared of | adj | бояться (чего-то)
+sensitive to | adj | чувствительный к
+serious about | adj | серьёзно настроенный насчёт
+short of | adj | испытывающий нехватку (чего-то)
+shocked at | adj | потрясённый (чем-то)
+shocked by | adj | потрясённый (чем-то)
+sick of | adj | сытый по горло (чем-то)
+similar to | adj | похожий на
+skilled at | adj | умелый в
+sorry about | adj | сожалеющий о
+sorry for | adj | сочувствующий (кому-то); извиняющийся за
+strict with | adj | строгий с
+successful in | adj | успешный в
+suitable for | adj | подходящий для
+superior to | adj | превосходящий (что-то)
+sure about | adj | уверенный в
+sure of | adj | уверенный в
+surprised at | adj | удивлённый (чем-то)
+surprised by | adj | удивлённый (чем-то)
+suspicious of | adj | подозрительно относящийся к
+sympathetic to | adj | сочувствующий (кому-то)
+terrible at | adj | ужасно умеющий (что-то), совсем не умеющий
+terrified of | adj | в ужасе от
+thankful for | adj | благодарный за
+tired of | adj | уставший от
+typical of | adj | типичный для
+upset about | adj | расстроенный из-за
+useful for | adj | полезный для
+worried about | adj | беспокоящийся о
+
+# ─── Существительное + предлог ───────────────────────────────────────
+access to | noun | доступ к
+advantage of | noun | преимущество (чего-то)
+advice on | noun | совет по (вопросу)
+alternative to | noun | альтернатива (чему-то)
+answer to | noun | ответ на
+approach to | noun | подход к
+attack on | noun | нападение на
+attitude to | noun | отношение к
+attitude towards | noun | отношение к
+belief in | noun | вера в
+cause of | noun | причина (чего-то)
+change in | noun | изменение (чего-то)
+chance of | noun | шанс на; вероятность (чего-то)
+cure for | noun | лекарство от
+damage to | noun | ущерб (чему-то)
+decrease in | noun | снижение (чего-то)
+delay in | noun | задержка (чего-то)
+demand for | noun | спрос на
+difference between | noun | разница между
+difficulty in | noun | трудность в
+disadvantage of | noun | недостаток (чего-то)
+effect on | noun | влияние на
+example of | noun | пример (чего-то)
+experience in | noun | опыт в
+expert in | noun | эксперт в
+expert on | noun | эксперт по
+fear of | noun | страх (перед чем-то)
+increase in | noun | рост (чего-то)
+influence on | noun | влияние на
+information about | noun | информация о
+interest in | noun | интерес к
+invitation to | noun | приглашение на
+key to | noun | ключ к
+knowledge of | noun | знание (чего-то)
+lack of | noun | нехватка (чего-то)
+love of | noun | любовь к
+need for | noun | потребность в
+opinion of | noun | мнение о (ком-то)
+opinion on | noun | мнение о (вопросе)
+pity for | noun | жалость к
+price of | noun | цена (чего-то)
+pride in | noun | гордость за
+problem with | noun | проблема с
+reaction to | noun | реакция на
+reason for | noun | причина (чего-то)
+relationship with | noun | отношения с
+reply to | noun | ответ на
+report on | noun | доклад о
+request for | noun | просьба о; запрос на
+respect for | noun | уважение к
+response to | noun | ответ на; реакция на
+result of | noun | результат (чего-то)
+rise in | noun | рост (чего-то)
+room for | noun | место для
+solution to | noun | решение (проблемы)
+success in | noun | успех в
+tax on | noun | налог на
+taste in | noun | вкус в (чём-то)
+threat to | noun | угроза (чему-то)
+trouble with | noun | проблемы с
+visit to | noun | визит в
+way of | noun | способ (чего-то)
+
+# ─── Устойчивые выражения с предлогом ────────────────────────────────
+according to | phrase | согласно; по словам
+at first | phrase | сначала
+at last | phrase | наконец
+at all | phrase | вообще; совсем
+because of | phrase | из-за
+by accident | phrase | случайно
+by heart | phrase | наизусть
+for example | phrase | например
+in addition to | phrase | в дополнение к
+in advance | phrase | заранее
+in charge of | phrase | отвечающий за
+in front of | phrase | перед
+in general | phrase | в целом
+in spite of | phrase | несмотря на
+instead of | phrase | вместо
+on behalf of | phrase | от имени
+on time | phrase | вовремя
+thanks to | phrase | благодаря

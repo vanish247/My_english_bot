@@ -496,9 +496,10 @@ async def main():
                 print('  ⚠️  pymorphy3 не установлен — проверка русских форм пропущена')
                 return
             expect = {'went': 'шёл', 'found': 'нашёл', 'saw': 'видел', 'keys': 'ключи',
-                      'goes': 'идёт', 'took': 'взял', 'children': 'дети', 'put up with': 'терпеть'}
+                      'goes': 'идёт', 'took': 'взял', 'children': 'дети'}
             got = {w: dic.meanings(w)[0].translation for w in expect}
             assert got == expect, got
+            assert dic.meanings('put up with')[0].translation.startswith('терпеть')
             labels = [m.translation for m in dic.meanings('went')]
             assert not any(l.startswith('очеред') for l in labels), 'у формы глагола нет существительных'
             found = {i.shown: i.translation for i in dic.extract('I turned the music off and went to bed.')}
@@ -561,7 +562,7 @@ async def main():
             assert 'Добавил 2 слова' in texts[-1].text, texts[-1].text
             words = database.get_words(UID)
             looking = next(w for w in words if w.word == 'looking for')
-            assert looking.translation == 'искать' and 'keys all morning' in looking.example, looking
+            assert looking.translation.startswith('искать') and 'keys all morning' in looking.example, looking
             _, answers = await send(cb_update('tx:0', mid), 'after add')
             assert answers[-1].show_alert
         await case('Текст → нашёл выражения (и разорванное turned … off), галочки → добавил с примером', t_extract)
@@ -577,6 +578,35 @@ async def main():
             texts, _ = await send(msg_update('We like it here, but the old house is small.'), 'only simple words')
             assert 'Не нашёл в тексте новых слов' in texts[-1].text
         await case('Текст: «Выбрать все», «Отмена», текст из одних простых слов', t_extract_all_and_simple)
+
+        async def t_prepositions():
+            past = rus.available()
+            first = lambda w: dic.meanings(w)[0].translation
+            assert first('wait for') == 'ждать (кого-то, что-то)', first('wait for')
+            assert first('afraid of') == 'бояться (чего-то)'
+            assert first('look at') == 'смотреть на', 'а не редкое «светить» из Wiktionary'
+            assert first('talk about') == 'говорить о', 'а не «вот это»'
+            assert first('interested in') == 'интересующийся (чем-то)'
+            found = {i.shown: i.translation for i in dic.extract(
+                'I waited for him. It depends on you. She is afraid of dogs. He has to go. '
+                'There are many reasons for that.')}
+            assert found.get('waited for') == ('ждал (кого-то, что-то)' if past else 'ждать (кого-то, что-то)'), found
+            assert found.get('depends on') == ('зависит от' if past else 'зависеть от'), found
+            assert found.get('afraid of') == 'бояться (чего-то)', found
+            assert found.get('has to') == 'должен, приходится (сделать)', found
+            assert found.get('reasons for') == ('причины (чего-то)' if past else 'причина (чего-то)'), found
+        await case('Сочетания с предлогами: waited for → ждал (кого-то), depends on → зависит от, afraid of', t_prepositions)
+
+        async def t_short_phrase():
+            texts, _ = await send(msg_update('waiting for people to'), 'short phrase not in dictionary')
+            assert 'Нашёл в тексте' in texts[-1].text, texts[-1].text
+            assert any('waiting for — ждать' in l for l in kb_text(texts[-1])), kb_text(texts[-1])
+            await send(cb_update('tx:cancel', session.next_id), 'cancel')
+            texts, _ = await send(msg_update('waiting for'), 'phrase itself')
+            assert kb_text(texts[-1])[0].startswith('ждать (кого-то'), kb_text(texts[-1])
+            texts, _ = await send(msg_update('qwertyzz zzqq'), 'nothing at all')
+            assert 'Не нашёл' in texts[-1].text and 'lk:own' in kb_data(texts[-1])
+        await case('Короткая фраза, которой нет целиком, разбирается по частям: «waiting for people to»', t_short_phrase)
 
         async def t_caption():
             uid_counter[0] += 1
