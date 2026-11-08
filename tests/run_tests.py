@@ -260,7 +260,7 @@ async def main():
         mid = session.next_id
         assert 'Как будем учить' in texts[-1].text and '3 слова' in texts[-1].text, texts[-1].text
         data = [b.callback_data for row in texts[-1].reply_markup.inline_keyboard for b in row]
-        assert data == ['study:cards', 'study:mailing', 'voc:page:0'], data
+        assert data == ['study:cards', 'study:shuffle', 'study:mailing', 'voc:page:0'], data
         texts, _ = await send(cb_update('study:cards', mid), 'cards')
         assert 'Карточка 1 из 3' in texts[-1].text and '🇷🇺' not in texts[-1].text
         front = [b.callback_data for row in texts[-1].reply_markup.inline_keyboard for b in row]
@@ -413,6 +413,32 @@ async def main():
         mid = session.next_id
         await send(cb_update('study:cards', mid), 'cards')
         return mid
+
+    async def t_card_order():
+        import random
+        words = [('passed upon', 'встретились на'), ('spoke of', 'говорили о'), ('came as a surprise', 'стало неожиданностью'),
+                 ('into his eyes', 'ему в глаза'), ('died alone', 'умер в одиночестве'), ('lost control', 'потерял контроль')]
+        database.delete_words(UID)
+        database.add_words(UID, [database.Word(w, t, '', '') for w, t in words])
+
+        async def run(mode):
+            await send(msg_update('🎴 Учить'), 'study menu')
+            mid = session.next_id
+            texts, _ = await send(cb_update(f'study:{mode}', mid), f'cards {mode}')
+            seen = []
+            for _ in words:
+                seen.append(texts[-1].text.split('<b>')[1].split('</b>')[0])
+                texts, _ = await send(cb_update('study:dontknow', mid), 'next')
+            return seen, cb_list(texts[-1])
+
+        seen, done = await run('cards')
+        assert seen == [w for w, _ in words], f'по порядку: {seen}'
+        assert done[0] == 'study:cards', '«Ещё раз» — снова по порядку'
+        random.seed(1)
+        seen, done = await run('shuffle')
+        assert sorted(seen) == sorted(w for w, _ in words) and seen != [w for w, _ in words], seen
+        assert done[0] == 'study:shuffle', '«Ещё раз» — снова вперемешку'
+    await case('Карточки по порядку — как в тексте/песне; вперемешку — перемешаны; «Ещё раз» помнит режим', t_card_order)
 
     async def t_card_edit():
         mid = await start_cards([('found', 'основывать')])

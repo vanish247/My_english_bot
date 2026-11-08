@@ -44,8 +44,8 @@ def study_menu(user_id, header=''):
             '🎴 <b>Как будем учить?</b>\n\n'
             f'📚 В словаре: {words_count(total)}\n'
             f'🔔 Рассылка: {mailing}\n\n'
-            '🎴 <b>Карточки</b> — пройдёшь слова прямо сейчас: '
-            'видишь слово, вспоминаешь, проверяешь перевод\n'
+            '🎴 <b>Карточки</b> — видишь слово, вспоминаешь, проверяешь перевод. '
+            '<b>По порядку</b> — как в тексте или песне, <b>вперемешку</b> — чтобы не запоминать место в списке\n'
             '🔔 <b>По расписанию</b> — буду сам присылать по слову раз в несколько минут')
     return text, study_menu_kb
 
@@ -114,18 +114,21 @@ async def _show_card(callback, state, data, revealed):
     await state.set_data(data)
 
 
-@router.callback_query(F.data == 'study:cards')
+@router.callback_query(F.data.in_({'study:cards', 'study:shuffle'}))
 async def cards_start(callback: CallbackQuery, state: FSMContext):
+    """study:cards — по порядку добавления (как в тексте), study:shuffle — вперемешку."""
     words = database.get_words(callback.from_user.id)
     if not words:
         await state.clear()
         await show(callback, EMPTY_TEXT, empty_kb)
         await callback.answer()
         return
-    random.shuffle(words)                       # каждый раз новый порядок
+    mode = callback.data.split(':')[1]
+    if mode == 'shuffle':
+        random.shuffle(words)                   # каждый раз новый порядок
     await state.set_state(Study.card)
     cards = [tuple(w) for w in words]
-    await _show_card(callback, state, {'cards': cards, 'pos': 0, 'known': 0}, revealed=False)
+    await _show_card(callback, state, {'cards': cards, 'pos': 0, 'known': 0, 'mode': mode}, revealed=False)
     await callback.answer()
 
 
@@ -151,7 +154,7 @@ async def answer(callback: CallbackQuery, state: FSMContext):
 
     if data['pos'] >= len(data['cards']):
         await state.clear()
-        await show(callback, _summary(data, finished=True), study_done_kb)
+        await show(callback, _summary(data, finished=True), study_done_kb(data.get('mode', 'cards')))
     else:
         await _show_card(callback, state, data, revealed=False)
     await callback.answer()
@@ -163,7 +166,7 @@ async def stop(callback: CallbackQuery, state: FSMContext):
     if data is None:
         return
     await state.clear()
-    await show(callback, _summary(data, finished=False), study_done_kb)
+    await show(callback, _summary(data, finished=False), study_done_kb(data.get('mode', 'cards')))
     await callback.answer()
 
 
@@ -229,7 +232,7 @@ async def delete_card(callback: CallbackQuery, state: FSMContext):
 
     if data['pos'] >= len(data['cards']):        # это была последняя карточка
         await state.clear()
-        await show(callback, _summary(data, finished=True), study_done_kb)
+        await show(callback, _summary(data, finished=True), study_done_kb(data.get('mode', 'cards')))
     else:
         await _show_card(callback, state, data, revealed=False)
     await callback.answer(f'🗑 Удалил «{item.word}» из словаря')
