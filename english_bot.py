@@ -6,7 +6,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BotCommand
 
 from config import BOT_TOKEN
-from handlers import add, dictionary, fallback, mailing, start, study, vocabulary
+from handlers import add, dictionary, fallback, inline, mailing, start, study, vocabulary
 from utils import dictionary as dictionary_db
 from utils.database import init_db
 from utils.scheduler import restore_mailings, scheduler
@@ -26,6 +26,7 @@ dp.include_routers(
     vocabulary.router,
     mailing.router,
     dictionary.router,      # кнопки экранов словаря и «свой перевод»
+    inline.router,          # «@Allomisha_bot слово» в любом чате
     add.router,             # слово / текст / пары — ловит любой английский текст
     fallback.router,
 )

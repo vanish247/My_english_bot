@@ -7,13 +7,14 @@
 найденные слова, отметки) храним в памяти по номеру сообщения. После
 перезапуска бота старые кнопки ответят «экран устарел».
 """
+import re
 from collections import OrderedDict
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from utils import database, dictionary
+from utils import ai_prompt, database, dictionary
 from utils.database import Word
 from utils.keyboards import MENU_BUTTONS, add_kb, added_kb, inline
 from utils.states import AddWords, Study
@@ -69,8 +70,8 @@ def _lookup_view(data):
         mark = '✅ ' if option.translation in data['added'] else ''
         note = option.pos + (f', {option.note}' if option.note else '')
         rows.append([(f'{mark}{short(option.translation, 30)} · {note}', f'lk:{i}')])
-    rows.append([('✏️ Свой перевод', 'lk:own'),
-                 ('✔️ Готово' if data['added'] else '✖️ Не надо', 'lk:close')])
+    rows.append([('✏️ Свой перевод', 'lk:own'), ('🤖 Через ИИ', 'lk:ai')])
+    rows.append([('✔️ Готово' if data['added'] else '✖️ Не надо', 'lk:close')])
     return text, inline(*rows)
 
 
@@ -106,6 +107,16 @@ async def lookup_pick(callback: CallbackQuery):
     shown = await show(callback, view, kb)
     _remember(user_id, shown.message_id, data)
     await callback.answer('Добавил ✅' if added else 'Уже было в словаре')
+
+
+@router.callback_query(F.data == 'lk:ai')
+async def lookup_ai(callback: CallbackQuery, bot: Bot):
+    data = _screen(callback, 'lookup')
+    if data is None:
+        await callback.answer(STALE, show_alert=True)
+        return
+    await send_ai_prompt(bot, callback.from_user.id, data['word'])
+    await callback.answer()
 
 
 @router.callback_query(F.data == 'lk:close')
@@ -164,8 +175,8 @@ async def own_translation_not_text(message: Message):
 
 def _text_view(data):
     items, selected = data['items'], data['selected']
-    lines = [f'📖 <b>Нашёл в тексте: {len(items)}</b>',
-             'Отметь, что хочешь учить, и нажми «Добавить».']
+    title = data.get('title') or f'📖 <b>Нашёл в тексте: {len(items)}</b>'
+    lines = [title, 'Отметь, что хочешь учить, и нажми «Добавить».']
     if data['known']:
         lines.append(f'☑️ Ещё {data["known"]} уже есть в твоём словаре')
     if data['over']:
@@ -177,6 +188,8 @@ def _text_view(data):
     all_selected = len(selected) == len(items)
     rows.append([('☐ Снять все' if all_selected else '☑️ Выбрать все', 'tx:all'),
                  ('✖️ Отмена', 'tx:cancel')])
+    if data.get('source'):
+        rows.append([('🤖 Разобрать точнее через ИИ', 'tx:ai')])
     return '\n'.join(lines), inline(*rows)
 
 
@@ -191,13 +204,16 @@ async def show_extraction(message: Message, text):
     items = dictionary.extract(text)
     known = {w.word.lower() for w in database.get_words(user_id)}
     fresh = [item for item in items if item.shown.lower() not in known]
-    data = {'kind': 'text', 'items': fresh[:dictionary.MAX_ITEMS], 'selected': set(),
+    data = {'kind': 'text', 'items': fresh[:dictionary.MAX_ITEMS], 'selected': set(), 'source': text,
             'known': len(items) - len(fresh), 'over': max(0, len(fresh) - dictionary.MAX_ITEMS)}
 
     if not data['items']:
         note = f'\n☑️ {data["known"]} уже есть в твоём словаре.' if data['known'] else ''
-        await message.answer('🤷 Не нашёл в тексте новых слов для изучения.' + note +
-                             '\nСамые простые слова (the, have, good…) я пропускаю.')
+        sent = await message.answer(
+            '🤷 Не нашёл в тексте новых слов для изучения.' + note +
+            '\nСамые простые слова (the, have, good…) я пропускаю.',
+            reply_markup=inline([('🤖 Разобрать через ИИ', 'tx:ai')]))
+        _remember(user_id, sent.message_id, data)
         return
     view, kb = _text_view(data)
     sent = await message.answer(view, reply_markup=kb)
@@ -243,7 +259,8 @@ async def text_add(callback: CallbackQuery):
     user_id = callback.from_user.id
     chosen = [data['items'][i] for i in sorted(data['selected'])]
     added, duplicates = database.add_words(
-        user_id, [Word(item.shown, item.translation, item.ipa, item.sentence) for item in chosen])
+        user_id, [Word(item.shown, item.translation, item.ipa, item.sentence, item.sentence_ru)
+                  for item in chosen])
 
     lines = [f'✅ Добавил {words_count(len(added))}:'] if added else []
     lines += [f'• <b>{esc(short(w.word, 40))}</b> — {esc(short(w.translation, 40))}' for w in added]
@@ -255,8 +272,114 @@ async def text_add(callback: CallbackQuery):
     await callback.answer('Добавил ✅')
 
 
+@router.callback_query(F.data == 'tx:ai')
+async def text_ai(callback: CallbackQuery, bot: Bot):
+    data = _screen(callback, 'text')
+    if data is None or not data.get('source'):
+        await callback.answer(STALE, show_alert=True)
+        return
+    await send_ai_prompt(bot, callback.from_user.id, data['source'])
+    await callback.answer()
+
+
 @router.callback_query(F.data == 'tx:cancel')
 async def text_cancel(callback: CallbackQuery):
     _forget(callback)
     await show(callback, 'Хорошо, ничего не добавил.')
     await callback.answer()
+
+
+# ─── Что прислали: слово или текст ─────────────────────────
+
+SHORT = 4          # до стольких слов без точек — это «слово», длиннее — «текст»
+
+
+def _as_one_word(text):
+    """Показать как одно слово (экран «Выбери значение») или разобрать по частям?
+
+    Одно слово — всегда как слово. Короткая фраза — как слово, только если она
+    есть в словаре целиком («look for»). Иначе — по частям, как текст:
+    «waiting for people to» → нашёл «waiting for». «Не нашёл» — только если
+    по частям тоже ничего нет.
+    """
+    if len(text.split()) == 1 or not dictionary.available():
+        return True
+    return bool(dictionary.meanings(text)) or not dictionary.extract(text)
+
+
+def looks_like_word(text):
+    """Слово или короткое выражение (а не текст для разбора)."""
+    return len(text.split()) <= SHORT and not re.search(r'[.!?]', text) and _as_one_word(text)
+
+
+async def show_for_text(message: Message, text):
+    """Слово → «Выбери значение», текст → «Нашёл в тексте»."""
+    if looks_like_word(text):
+        await show_lookup(message, text)
+    else:
+        await show_extraction(message, text)
+
+
+# ─── Карточки через любой ИИ ───────────────────────────────
+
+AI_HOWTO = (
+    '🤖 <b>Промпт для ИИ</b>\n\n'
+    '1. Нажми на текст ниже — он скопируется\n'
+    '2. Вставь его в любой ИИ: ChatGPT, Claude, DeepSeek, Алиса…\n'
+    '3. Ответ ИИ скопируй или перешли сюда — сделаю из него карточки\n\n'
+)
+
+
+async def send_ai_prompt(bot: Bot, user_id, text):
+    """Присылает готовый промпт с текстом пользователя внутри."""
+    await bot.send_message(user_id, AI_HOWTO + f'<pre>{esc(ai_prompt.build_prompt(text))}</pre>')
+
+
+@router.callback_query(F.data == 'ai:start')
+async def ai_start(callback: CallbackQuery, state: FSMContext):
+    """«🤖 Через ИИ» в режиме добавления слов: сначала просим текст."""
+    previous = await state.get_state()
+    await state.set_state(AddWords.ai)
+    await state.update_data(ai_prev=previous)
+    await callback.bot.send_message(
+        callback.from_user.id,
+        '🤖 Пришли текст, пост, песню или слово — соберу из него промпт для ИИ.')
+    await callback.answer()
+
+
+@router.message(AddWords.ai, F.text | F.caption, ~F.text.in_(MENU_BUTTONS), ~F.text.startswith('/'))
+async def ai_text(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    if data.get('ai_prev') == AddWords.waiting.state:
+        await state.set_state(AddWords.waiting)
+    else:
+        await state.clear()
+    await send_ai_prompt(bot, message.from_user.id, message.text or message.caption)
+
+
+@router.message(AddWords.ai, ~F.text.in_(MENU_BUTTONS))
+async def ai_not_text(message: Message):
+    await message.answer('Пришли текст — из него я соберу промпт для ИИ 🙂')
+
+
+async def show_ai_cards(message: Message, cards):
+    """Экран с галочками из ответа ИИ."""
+    user_id = message.from_user.id
+    known = {w.word.lower() for w in database.get_words(user_id)}
+    items = []
+    for card in cards:
+        word = dictionary.normalize_case(card.phrase)
+        if word.lower() in known:
+            continue
+        found = dictionary.meanings(word, limit=1) if ' ' not in word else []
+        items.append(dictionary.Found(word, card.translation, found[0].ipa if found else '',
+                                      card.sentence, card.sentence_ru))
+    data = {'kind': 'text', 'items': items[:dictionary.MAX_ITEMS], 'selected': set(),
+            'known': len(cards) - len(items), 'over': max(0, len(items) - dictionary.MAX_ITEMS),
+            'title': f'🤖 <b>Карточки от ИИ: {min(len(items), dictionary.MAX_ITEMS)}</b>'}
+    if not data['items']:
+        await message.answer('☑️ Все слова из ответа ИИ уже есть в твоём словаре.')
+        return
+    view, kb = _text_view(data)
+    sent = await message.answer(view, reply_markup=kb)
+    _remember(user_id, sent.message_id, data)

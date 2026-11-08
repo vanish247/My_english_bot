@@ -79,6 +79,8 @@ def _card(data, revealed):
         text += f'\n🇷🇺 {esc(item.translation) if item.translation else "—"}'
         if item.example:
             text += f'\n\n💬 <i>{esc(item.example)}</i>'
+            if item.example_ru:
+                text += f'\n     {esc(item.example_ru)}'
     else:
         text += '\n\n<i>Вспомни перевод и нажми «Показать»</i>'
     return text

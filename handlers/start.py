@@ -1,11 +1,13 @@
 """Приветствие и помощь."""
 from aiogram import F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
+from handlers.dictionary import show_for_text
 from utils import database
 from utils.keyboards import BTN_HELP, main_menu
+from utils.words import esc, short
 
 router = Router()
 
@@ -35,14 +37,40 @@ HELP_TEXT = (
     '/vocabulary — мой словарь\n'
     '/mailing — сразу к настройке рассылки\n'
     '/help — эта справка\n\n'
+    '<b>В любом чате</b>\n'
+    'Напиши <code>@Allomisha_bot слово</code> или фразу — над клавиатурой появится перевод. '
+    'Можно добавить слова себе или отправить карточку собеседнику.\n\n'
     'Если что-то пошло не так — нажми любую кнопку меню, она всегда возвращает в начало.'
 )
 
 
+INLINE_HELP = (
+    '🔍 <b>Перевод в любом чате</b>\n\n'
+    'В поле ввода любого чата напиши моё имя и слово или фразу:\n'
+    '<code>@Allomisha_bot ubiquitous</code>\n'
+    '<code>@Allomisha_bot I\'ve been looking for my keys</code>\n\n'
+    'Над клавиатурой появятся переводы.\n'
+    '📥 <b>Кнопка над списком</b> — выбрать слова и добавить себе, собеседник ничего не увидит.\n'
+    '👆 <b>Нажать на перевод</b> — отправить карточку в чат, под ней будет «➕ В мой словарь».'
+)
+
+
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
+async def cmd_start(message: Message, state: FSMContext, command: CommandObject):
     await state.clear()
     database.init_user(message.from_user.id, message.from_user.username or '')
+    args = command.args or ''
+
+    # Пришли из inline-режима по кнопке «📥 Выбрать слова и добавить в бота»
+    if args.startswith('q_'):
+        text = database.get_inline_text(args[2:])
+        if text:
+            await message.answer(f'📥 Слова из фразы:\n<i>{esc(short(text, 200))}</i>', reply_markup=main_menu)
+            await show_for_text(message, text)
+            return
+    if args == 'inline_help':
+        await message.answer(INLINE_HELP, reply_markup=main_menu)
+        return
     await message.answer(START_TEXT, reply_markup=main_menu)
 
 

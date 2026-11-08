@@ -31,8 +31,8 @@ POS_RU = {
 
 # Значение слова для выбора кнопкой
 Meaning = namedtuple('Meaning', 'translation pos note ipa example')
-# Слово или выражение, найденное в тексте
-Found = namedtuple('Found', 'shown translation ipa sentence')
+# Слово или выражение, найденное в тексте (sentence_ru — перевод предложения, его даёт ИИ)
+Found = namedtuple('Found', 'shown translation ipa sentence sentence_ru', defaults=('',))
 
 TOKEN_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)*")
 SENTENCE_RE = re.compile(r'[^.!?\n]+[.!?]*')

@@ -7,18 +7,16 @@
 
 Работает и в режиме «📚 Добавить слова», и просто из главного меню.
 """
-import re
-
 from aiogram import F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from handlers.dictionary import show_extraction, show_lookup
+from handlers.dictionary import show_ai_cards, show_for_text
 from handlers.study import study_menu
-from utils import database, dictionary
+from utils import ai_prompt, database
 from utils.database import Word
-from utils.keyboards import BTN_ADD, add_kb, added_kb, empty_kb, main_menu
+from utils.keyboards import BTN_ADD, add_kb, add_prompt_kb, added_kb, empty_kb, main_menu
 from utils.states import AddWords
 from utils.ui import drop_buttons, show
 from utils.words import esc, has_latin, parse_words, short, words_count
@@ -30,25 +28,13 @@ PROMPT = (
     'Пришли мне:\n'
     '🔤 <b>слово</b> — найду перевод в словаре: <code>ubiquitous</code>\n'
     '📖 <b>текст</b>, пост или песню — найду в нём слова и выражения\n'
-    '✍️ <b>пары</b> — <code>apple - яблоко, fly - летать</code>\n\n'
+    '✍️ <b>пары</b> — <code>apple - яблоко, fly - летать</code>\n'
+    '🤖 или <b>через ИИ</b> — соберу промпт для ChatGPT, Claude, DeepSeek, Алисы, '
+    'а из ответа сделаю карточки\n\n'
     'Можно несколькими сообщениями подряд. Когда закончишь — жми «Готово».'
 )
 NOT_UNDERSTOOD = 'Не понял 🤔 Пришли английское слово, текст или выбери действие в меню 👇'
-SHORT = 4          # до стольких слов без точек — это «слово», длиннее — «текст»
 MAX_SHOWN = 10     # больше не перечисляем, чтобы ответ не превысил лимит Telegram
-
-
-def _as_one_word(text):
-    """Показать как одно слово (экран «Выбери значение») или разобрать по частям?
-
-    Одно слово — всегда как слово. Короткая фраза — как слово, только если она
-    есть в словаре целиком («look for»). Иначе — по частям, как текст:
-    «waiting for people to» → нашёл «waiting for». «Не нашёл» — только если
-    по частям тоже ничего нет.
-    """
-    if len(text.split()) == 1 or not dictionary.available():
-        return True
-    return bool(dictionary.meanings(text)) or not dictionary.extract(text)
 
 
 def _bullets(items):
@@ -62,19 +48,19 @@ def _bullets(items):
 @router.message(F.text == BTN_ADD)
 async def add_from_menu(message: Message, state: FSMContext):
     await state.set_state(AddWords.waiting)
-    await message.answer(PROMPT, reply_markup=add_kb)
+    await message.answer(PROMPT, reply_markup=add_prompt_kb)
 
 
 @router.callback_query(F.data == 'add:start')
 async def add_from_button(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AddWords.waiting)
-    await show(callback, PROMPT, add_kb)
+    await show(callback, PROMPT, add_prompt_kb)
     await callback.answer()
 
 
 @router.message(StateFilter(None, AddWords.waiting), F.text | F.caption)
 async def smart_input(message: Message, state: FSMContext):
-    """Определяет, что прислали: пары, слово или текст."""
+    """Определяет, что прислали: ответ ИИ, пары, слово или текст."""
     text = (message.text or message.caption or '').strip()
     adding = await state.get_state() == AddWords.waiting.state
 
@@ -86,13 +72,15 @@ async def smart_input(message: Message, state: FSMContext):
             await message.answer(NOT_UNDERSTOOD, reply_markup=main_menu)
         return
 
+    cards = ai_prompt.parse_answer(text)          # строки «фраза | перевод | …» — ответ ИИ
+    if cards:
+        await show_ai_cards(message, cards)
+        return
     pairs, bad = parse_words(text)
     if pairs and any(has_latin(word) for word, _ in pairs) and len(pairs) >= len(bad):
         await _add_pairs(message, pairs, bad, adding)
-    elif len(text.split()) <= SHORT and not re.search(r'[.!?]', text) and _as_one_word(text):
-        await show_lookup(message, text)
     else:
-        await show_extraction(message, text)
+        await show_for_text(message, text)
 
 
 async def _add_pairs(message: Message, pairs, bad, adding):

@@ -10,6 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 class AddWords(StatesGroup):
     waiting = State()   # режим «Добавить слова»: ждём слова, текст или пары
     custom = State()    # ждём свой перевод для слова
+    ai = State()        # ждём текст, из которого собрать промпт для ИИ
 
 
 class Study(StatesGroup):

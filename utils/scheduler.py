@@ -4,6 +4,8 @@
 после перезапуска бота рассылки восстанавливаются в restore_mailings().
 """
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
@@ -18,6 +20,20 @@ log = logging.getLogger(__name__)
 # Один планировщик на всё приложение
 scheduler = AsyncIOScheduler()
 
+# Тихие часы: ночью слова не присылаем (по московскому времени)
+TIMEZONE = ZoneInfo('Europe/Moscow')
+QUIET_FROM, QUIET_TO = 22, 9
+
+
+def _now():
+    return datetime.now(TIMEZONE)
+
+
+def is_quiet_time():
+    """С 22:00 до 9:00 — тихие часы."""
+    hour = _now().hour
+    return hour >= QUIET_FROM or hour < QUIET_TO
+
 # Какое слово рассылки следующее — у каждого пользователя своя позиция.
 # Отдельно от тренировки, чтобы рассылка не сбивала карточки.
 _positions = {}
@@ -29,6 +45,8 @@ def _job_id(user_id):
 
 async def send_next_word(bot: Bot, user_id: int):
     """Отправляет следующее слово — вызывается планировщиком по расписанию"""
+    if is_quiet_time():
+        return                      # ночью молчим; утром рассылка продолжится с того же слова
     words = database.get_words(user_id)
     if not words:
         stop_mailing(user_id)
@@ -45,6 +63,8 @@ async def send_next_word(bot: Bot, user_id: int):
         text += f'\n🇷🇺 <tg-spoiler>{esc(item.translation)}</tg-spoiler>'
     if item.example:
         text += f'\n\n💬 <i>{esc(item.example)}</i>'
+        if item.example_ru:
+            text += f'\n<tg-spoiler>{esc(item.example_ru)}</tg-spoiler>'
 
     if await _send(bot, user_id, text, mailing_word_kb):
         _positions[user_id] = position + 1

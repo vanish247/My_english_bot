@@ -23,7 +23,7 @@ os.environ['BOT_TOKEN'] = '123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 
 from aiogram.client.session.base import BaseSession  # noqa: E402
 from aiogram.types import (Chat, InlineKeyboardMarkup, Message,  # noqa: E402
-                           ReplyKeyboardMarkup)
+                           ReplyKeyboardMarkup, User)
 
 UID = 555
 BOT_ID = 123456789
@@ -45,6 +45,8 @@ class FakeSession(BaseSession):
         if name == 'EditMessageText':
             return Message(message_id=method.message_id, date=datetime.now(),
                            chat=Chat(id=method.chat_id, type='private'), text=method.text)
+        if name == 'GetMe':
+            return User(id=BOT_ID, is_bot=True, first_name='Bot', username='Allomisha_bot')
         return True
 
     async def stream_content(self, *a, **k):
@@ -97,6 +99,20 @@ def msg_update(text=None, dice=False):
     else:
         m['text'] = text
     return {'update_id': uid_counter[0], 'message': m}
+
+
+def inline_query_update(query):
+    uid_counter[0] += 1
+    return {'update_id': uid_counter[0], 'inline_query': {
+        'id': str(uid_counter[0]), 'from': user(), 'query': query, 'offset': ''}}
+
+
+def inline_cb_update(data, user_id=UID):
+    """Нажатие кнопки под сообщением, отправленным через inline-режим (у него нет chat/message)."""
+    uid_counter[0] += 1
+    return {'update_id': uid_counter[0], 'callback_query': {
+        'id': str(uid_counter[0]), 'chat_instance': 'ci', 'data': data, 'inline_message_id': 'imsg',
+        'from': {'id': user_id, 'is_bot': False, 'first_name': 'Друг', 'username': f'u{user_id}'}}}
 
 
 def cb_update(data, message_id):
@@ -177,7 +193,7 @@ async def main():
 
     async def t_add():
         texts, _ = await send(msg_update('📚 Добавить слова'), 'add start')
-        assert texts[-1].reply_markup.inline_keyboard[0][0].callback_data == 'add:done'
+        assert {'add:done', 'ai:start'} <= {b.callback_data for row in texts[-1].reply_markup.inline_keyboard for b in row}
         texts, _ = await send(msg_update(
             'apple - яблоко, fly-летать, well-known - известный\nrun — бежать, просто текст, , <3 - love & joy'),
             'add words')
@@ -608,6 +624,64 @@ async def main():
             assert 'Не нашёл' in texts[-1].text and 'lk:own' in kb_data(texts[-1])
         await case('Короткая фраза, которой нет целиком, разбирается по частям: «waiting for people to»', t_short_phrase)
 
+        async def t_ai_from_screens():
+            text = "I've been looking for my keys all morning and finally found them under the couch."
+            texts, _ = await send(msg_update(text), 'extract for AI')
+            assert 'tx:ai' in cb_list(texts[-1])
+            texts, _ = await send(cb_update('tx:ai', session.next_id), 'AI from text screen')
+            assert '<pre>' in texts[-1].text and 'finally found them' in texts[-1].text
+            texts, _ = await send(msg_update('serendipityzz'), 'lookup for AI')
+            texts, _ = await send(cb_update('lk:ai', session.next_id), 'AI from lookup')
+            assert 'serendipityzz' in texts[-1].text
+            texts, _ = await send(msg_update('We like it here, but the old house is small.'), 'nothing found')
+            assert 'tx:ai' in cb_list(texts[-1]), 'даже если словарь ничего не нашёл, можно через ИИ'
+        await case('«🤖 Через ИИ» на экранах «Нашёл в тексте», «Не нашёл» и «Выбери значение»', t_ai_from_screens)
+
+        async def inline_answer(query):
+            before = len(session.calls)
+            await dp.feed_raw_update(bot, inline_query_update(query))
+            answers = [c for c in session.calls[before:] if type(c).__name__ == 'AnswerInlineQuery']
+            assert answers, f'на inline-запрос «{query}» нет ответа'
+            return answers[-1]
+
+        async def t_inline_word():
+            database.delete_words(UID)
+            ans = await inline_answer('ubiquitous')
+            assert ans.results[0].title == 'ubiquitous — вездесущий', ans.results[0].title
+            assert ans.button.start_parameter.startswith('q_')
+            card_data = ans.results[0].reply_markup.inline_keyboard[0][0].callback_data
+            assert card_data.startswith('sh:') and len(card_data.encode()) <= 64
+            assert 'вездесущий' in ans.results[0].input_message_content.message_text
+            # друг (новый пользователь) нажимает «➕ В мой словарь»
+            _, answers = await send(inline_cb_update(card_data, user_id=777), 'friend adds')
+            assert answers[-1].show_alert and 'Добавил' in answers[-1].text and '@Allomisha_bot' in answers[-1].text
+            assert [w.word for w in database.get_words(777)] == ['ubiquitous']
+            _, answers = await send(inline_cb_update(card_data, user_id=777), 'friend again')
+            assert 'уже есть' in answers[-1].text
+            _, answers = await send(inline_cb_update(card_data), 'me')
+            assert '@Allomisha_bot' not in answers[-1].text, 'знакомому пользователю не подсказываем запуск'
+            assert [w.word for w in database.get_words(UID)] == ['ubiquitous']
+            _, answers = await send(inline_cb_update('sh:0000000000000000'), 'unknown card')
+            assert answers[-1].show_alert
+        await case('Inline: «@бот ubiquitous» → перевод; «➕ В мой словарь» добавляет тому, кто нажал', t_inline_word)
+
+        async def t_inline_phrase():
+            database.delete_words(UID)
+            ans = await inline_answer("I've been looking for my keys all morning")
+            titles = [r.title for r in ans.results]
+            assert any(t.startswith('looking for — искать') for t in titles), titles
+            assert any(t.startswith('keys — ключи') for t in titles) or not rus.available(), titles
+            text_id = ans.button.start_parameter
+            texts, _ = await send(msg_update(f'/start {text_id}'), 'open bot from inline button')
+            assert any('Слова из фразы' in t.text for t in texts) and 'Нашёл в тексте' in texts[-1].text
+            ans = await inline_answer('')
+            assert ans.button.start_parameter == 'inline_help' and ans.results == []
+            texts, _ = await send(msg_update('/start inline_help'), 'inline help')
+            assert 'в любом чате' in texts[-1].text.lower()
+            ans = await inline_answer('qwertyzzz')
+            assert ans.results == [] and 'Не нашёл' in ans.button.text
+        await case('Inline: фраза → слова из неё; «📥» открывает бота с галочками; пустой запрос → подсказка', t_inline_phrase)
+
         async def t_caption():
             uid_counter[0] += 1
             upd = {'update_id': uid_counter[0], 'message': {
@@ -651,6 +725,78 @@ async def main():
         assert dic.meanings('art')[0].translation == 'искусство'
         assert all(i.translation != 'быть' for i in dic.extract('I am interested in art.'))
     await case('Старинные формы не мешают: art → искусство, а не «быть» (thou art)', t_no_archaic)
+
+    async def t_quiet_hours():
+        from datetime import datetime as dt
+        database.delete_words(UID)
+        database.add_words(UID, [database.Word('apple', 'яблоко', '', '')])
+        saved = sch._now
+        try:
+            for hour, minute, expect in ((23, 0, False), (3, 0, False), (8, 59, False), (9, 0, True), (21, 59, True)):
+                sch._now = lambda: dt(2026, 11, 8, hour, minute, tzinfo=sch.TIMEZONE)
+                before = len(session.calls)
+                await sch.send_next_word(bot, UID)
+                sent = any(type(c).__name__ == 'SendMessage' for c in session.calls[before:])
+                assert sent == expect, f'{hour:02}:{minute:02} — ожидалось {"отправить" if expect else "молчать"}'
+        finally:
+            sch._now = saved
+    await case('Тихие часы: с 22:00 до 9:00 по Москве рассылка молчит', t_quiet_hours)
+
+    from utils import ai_prompt
+
+    MESSY_AI_ANSWER = """Вот карточки по твоему тексту:
+```text
+1. **looking for** | искал (кого-то, что-то) | I've been looking for my keys. | Я искал ключи.
+| фраза | перевод | предложение | перевод предложения |
+|---|---|---|---|
+| put up with | терпеть (кого-то, что-то) | I can't put up with it. | Я не могу это терпеть. |
+- Keys | ключи | My keys are here. | Мои ключи здесь.
+looking for | дубль | x | y
+```
+Надеюсь, помогло!"""
+
+    async def t_ai_parse():
+        prompt = ai_prompt.build_prompt('I was waiting for you.')
+        assert 'I was waiting for you.' in prompt and 'фраза | перевод | предложение | перевод предложения' in prompt
+        assert len(ai_prompt.build_prompt('word ' * 2000)) < 4000, 'длинный текст обрезается'
+        cards = ai_prompt.parse_answer(MESSY_AI_ANSWER)
+        assert [c.phrase for c in cards] == ['looking for', 'put up with', 'Keys'], cards
+        assert cards[0].sentence_ru == 'Я искал ключи.' and cards[1].translation.startswith('терпеть')
+        assert ai_prompt.parse_answer('apple - яблоко, cat - кот') == [], 'обычные пары — не ответ ИИ'
+        assert ai_prompt.parse_answer('Просто текст без черт') == []
+    await case('Ответ ИИ разбирается даже с нумерацией, **жирным**, таблицей и лишним текстом', t_ai_parse)
+
+    async def t_ai_cards():
+        database.delete_words(UID)
+        texts, _ = await send(msg_update(MESSY_AI_ANSWER), 'paste AI answer')
+        assert 'Карточки от ИИ: 3' in texts[-1].text, texts[-1].text
+        mid = session.next_id
+        await send(cb_update('tx:all', mid), 'select all')
+        texts, _ = await send(cb_update('tx:add', mid), 'add AI cards')
+        assert 'Добавил 3 слова' in texts[-1].text, texts[-1].text
+        words = {w.word: w for w in database.get_words(UID)}
+        assert set(words) == {'looking for', 'put up with', 'keys'}, set(words)
+        assert words['looking for'].example_ru == 'Я искал ключи.'
+        database.delete_words(UID)
+        database.add_words(UID, [words['looking for']])
+        await send(msg_update('🎴 Учить'), 'study menu')
+        m2 = session.next_id
+        await send(cb_update('study:cards', m2), 'cards')
+        texts, _ = await send(cb_update('study:reveal', m2), 'reveal')
+        assert 'Я искал ключи.' in texts[-1].text, 'перевод примера на обороте карточки'
+        await send(cb_update('study:stop', m2), 'stop')
+    await case('Вставил ответ ИИ → «Карточки от ИИ» → добавил, перевод примера на карточке', t_ai_cards)
+
+    async def t_ai_prompt_buttons():
+        texts, _ = await send(msg_update('/add'), 'add mode')
+        assert 'ai:start' in cb_list(texts[-1])
+        await send(cb_update('ai:start', session.next_id), 'ai start')
+        texts, _ = await send(msg_update('I was waiting for you all day.'), 'text for AI')
+        assert '<pre>' in texts[-1].text and 'I was waiting for you all day.' in texts[-1].text
+        texts, _ = await send(msg_update('dog - собака'), 'back in add mode')
+        assert 'add:done' in cb_list(texts[-1]), 'после промпта возвращаемся в режим добавления'
+        await send(cb_update('add:done', session.next_id), 'done')
+    await case('«🤖 Через ИИ» в режиме добавления → промпт с текстом → снова режим добавления', t_ai_prompt_buttons)
 
     async def t_no_dictionary():
         saved = dic.DICT_PATH
