@@ -63,6 +63,13 @@ def init_db():
                 id TEXT PRIMARY KEY, text TEXT, created_at TEXT DEFAULT (datetime('now')))
         ''')
 
+        # Текст, из которого собран последний промпт для ИИ: по нему карточки из ответа ИИ
+        # расставляются в порядке текста (ИИ любит их перемешивать)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS ai_texts (
+                user_id INTEGER PRIMARY KEY, text TEXT, created_at TEXT DEFAULT (datetime('now')))
+        ''')
+
         # Фразы из inline-режима нужны, только пока человек жмёт «📥» — неделю храним, потом чистим
         conn.execute("DELETE FROM inline_texts WHERE created_at < datetime('now', '-7 days')")
 
@@ -217,6 +224,19 @@ def save_inline_text(text) -> str:
 def get_inline_text(text_id):
     with sqlite3.connect(DB) as conn:
         row = conn.execute('SELECT text FROM inline_texts WHERE id = ?', (text_id,)).fetchone()
+    return row[0] if row else None
+
+
+def save_ai_text(user_id: int, text: str):
+    """Запоминает текст, из которого собран промпт для ИИ (храним только последний)."""
+    with sqlite3.connect(DB) as conn:
+        conn.execute("INSERT OR REPLACE INTO ai_texts (user_id, text, created_at) "
+                     "VALUES (?, ?, datetime('now'))", (user_id, text))
+
+
+def get_ai_text(user_id: int):
+    with sqlite3.connect(DB) as conn:
+        row = conn.execute('SELECT text FROM ai_texts WHERE user_id = ?', (user_id,)).fetchone()
     return row[0] if row else None
 
 

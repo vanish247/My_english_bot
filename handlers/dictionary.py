@@ -336,6 +336,7 @@ AI_PROMPT_PASTED = ('🤖 Это сам промпт 🙂 Вставь его в
 async def send_ai_prompt(bot: Bot, user_id, text):
     """Присылает инструкцию и отдельным сообщением — промпт с текстом пользователя."""
     prompt, cut = ai_prompt.build_prompt(text)
+    database.save_ai_text(user_id, text)          # чтобы потом расставить карточки в порядке текста
     note = (f'\n\n✂️ Текст длинный — в промпт вошли первые ~{ai_prompt.MAX_TEXT} символов. '
             'Остальное пришли следующим сообщением.') if cut else ''
     await bot.send_message(user_id, AI_HOWTO + note)
@@ -373,6 +374,7 @@ async def show_ai_cards(message: Message, cards):
     """Экран с галочками из ответа ИИ."""
     user_id = message.from_user.id
     known = {w.word.lower() for w in database.get_words(user_id)}
+    cards = ai_prompt.order_by_text(cards, database.get_ai_text(user_id))   # в порядке текста
     items = []
     for card in cards:
         word = dictionary.normalize_case(card.phrase)
@@ -381,9 +383,10 @@ async def show_ai_cards(message: Message, cards):
         found = dictionary.meanings(word, limit=1) if ' ' not in word else []
         items.append(dictionary.Found(word, card.translation, found[0].ipa if found else '',
                                       card.sentence, card.sentence_ru))
-    data = {'kind': 'text', 'items': items[:dictionary.MAX_ITEMS], 'selected': set(),
-            'known': len(cards) - len(items), 'over': max(0, len(items) - dictionary.MAX_ITEMS),
-            'title': f'🤖 <b>Карточки от ИИ: {min(len(items), dictionary.MAX_ITEMS)}</b>'}
+    limit = ai_prompt.MAX_CARDS
+    data = {'kind': 'text', 'items': items[:limit], 'selected': set(),
+            'known': len(cards) - len(items), 'over': max(0, len(items) - limit),
+            'title': f'🤖 <b>Карточки от ИИ: {min(len(items), limit)}</b>'}
     if not data['items']:
         await message.answer('☑️ Все слова из ответа ИИ уже есть в твоём словаре.')
         return

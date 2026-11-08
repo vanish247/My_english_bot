@@ -828,6 +828,39 @@ looking for | дубль | x | y
         await send(cb_update('study:stop', m2), 'stop')
     await case('Вставил ответ ИИ → «Карточки от ИИ» → добавил, перевод примера на карточке', t_ai_cards)
 
+    async def t_ai_order():
+        prompt, _ = ai_prompt.build_prompt('x')
+        assert 'в том порядке, в котором фразы встречаются в тексте' in prompt
+        assert 'артикли' in prompt and 'если они стоят отдельно' not in prompt and 'go to the park' in prompt
+        source = ("I was walking in the park. Suddenly I came across an old friend. "
+                  "We decided to catch up over coffee, and he kept on talking about his trip.")
+        C = ai_prompt.Card
+        shuffled = [C('kept on', 'продолжал', 'We decided to catch up over coffee, and he kept on talking about his trip.', ''),
+                    C('made up', 'выдумал', 'He made it all up.', ''),            # такого в тексте нет
+                    C('came across', 'встретил', 'Suddenly I came across an old friend.', ''),
+                    C('catch up', 'пообщаться', 'We decided to catch up over coffee, and he kept on talking about his trip.', ''),
+                    C('walking in the park', 'гулял в парке', 'I was walking in the park.', '')]
+        ordered = [c.phrase for c in ai_prompt.order_by_text(shuffled, source)]
+        assert ordered == ['walking in the park', 'came across', 'catch up', 'kept on', 'made up'], ordered
+
+        # весь путь: «🤖 Через ИИ» → текст → ответ ИИ в другом порядке → экран в порядке текста
+        database.delete_words(UID)
+        await send(msg_update('/add'), 'add mode')
+        await send(cb_update('ai:start', session.next_id), 'ai start')
+        await send(msg_update(source), 'source text')
+        answer = '\n'.join(f'{c.phrase} | {c.translation} | {c.sentence} | перевод' for c in shuffled)
+        texts, _ = await send(msg_update(answer), 'shuffled AI answer')
+        labels = [b.text for row in texts[-1].reply_markup.inline_keyboard for b in row if b.callback_data[3:].isdigit()]
+        phrases = [l.split(' — ')[0][2:] for l in labels]
+        assert phrases == ['walking in the park', 'came across', 'catch up', 'kept on', 'made up'], phrases
+        mid = session.next_id
+        await send(cb_update('tx:3', mid), 'pick kept on')
+        await send(cb_update('tx:0', mid), 'pick walking')
+        await send(cb_update('tx:add', mid), 'add')
+        assert [w.word for w in database.get_words(UID)] == ['walking in the park', 'kept on'], 'добавляются тоже по порядку'
+        await send(cb_update('add:done', session.next_id), 'done')
+    await case('Карточки от ИИ стоят в порядке текста, даже если ИИ их перемешал', t_ai_order)
+
     async def t_ai_prompt_buttons():
         texts, _ = await send(msg_update('/add'), 'add mode')
         assert 'ai:start' in cb_list(texts[-1])
