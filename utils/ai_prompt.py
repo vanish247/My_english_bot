@@ -4,69 +4,124 @@
 пересылает ответ боту → бот разбирает строки и делает карточки.
 
 Формат ответа — простые строки через «|», а не JSON: с ним справляется даже простой ИИ.
+Разбор терпимый: понимает ответ с лишним текстом, нумерацией, таблицей и даже
+ответ одним абзацем без переносов строк.
 """
 import re
 from collections import namedtuple
 
 from utils.words import has_latin
 
-MAX_TEXT = 2500          # длиннее текст обрезаем, чтобы промпт влез в одно сообщение Telegram
-
 Card = namedtuple('Card', 'phrase translation sentence sentence_ru')
 
-PROMPT = '''Ты помогаешь учить английские слова. Найди в тексте ниже то, что стоит выучить: фразовые глаголы (look for, give up), глаголы с предлогами (wait for, depend on), устойчивые выражения и идиомы, а также нечастые слова. Самые простые слова (the, have, good, go) пропускай.
+PROMPT = '''Ты — составитель карточек для изучения английских слов. Из текста ниже выбери то, что стоит выучить русскоязычному ученику, и оформи каждую находку как карточку.
 
-Ответ — только строки, без нумерации, заголовков и пояснений. Каждая строка строго в формате:
+ЧТО ВЫБИРАТЬ (в порядке важности):
+1. Фразовые глаголы: look for, give up, made my way back.
+2. Глаголы и прилагательные с предлогами: wait for, depend on, afraid of.
+3. Устойчивые выражения и идиомы: face to face, came as a surprise.
+4. Нечастые слова: roamed, gazed.
+
+ЧТО ПРОПУСКАТЬ: простые слова (the, have, go, good, people), имена, числа, повторы.
+
+ФОРМАТ — одна карточка на строку, ровно 4 поля через « | »:
 фраза | перевод | предложение | перевод предложения
 
-Правила:
-- фраза — как в тексте, маленькими буквами (кроме имён собственных); фразовые глаголы и выражения целиком: looking for, put up with
-- перевод — по-русски, именно в этом контексте и в той же форме, что в тексте: went → пошёл, keys → ключи; у глаголов с предлогом в скобках подскажи, что идёт дальше: ждать (кого-то)
-- предложение — предложение из текста, где встретилась фраза
-- перевод предложения — естественный перевод на русский
-- не больше 30 строк
+- фраза — как в тексте и в той же форме (looked, keys), маленькими буквами; выражение целиком.
+- перевод — по-русски, именно в этом контексте и в той же форме: looked → посмотрел, keys → ключи. Если после глагола нужно дополнение, подскажи в скобках: ждать (кого-то).
+- предложение — целиком предложение или строка песни из текста, где встретилась фраза. Не сокращай и не меняй его.
+- перевод предложения — естественный перевод на русский.
 
-Пример строки:
+ПРИМЕР ОТВЕТА:
+```
 looking for | искал (кого-то, что-то) | I've been looking for my keys all morning. | Я всё утро искал ключи.
+came as a surprise | стало неожиданностью | Which came as a surprise | Что стало неожиданностью.
+roamed | скитался | For years and years I roamed | Годами я скитался.
+```
 
-Текст:
-"""
+СТРОГИЕ ПРАВИЛА:
+- Весь ответ — внутри одного блока кода (```), чтобы его можно было скопировать одной кнопкой.
+- Каждая карточка — с новой строки. Ровно 4 поля, разделитель « | ». Внутри полей символ | не используй.
+- Никаких заголовков, нумерации, таблиц, жирного шрифта и пояснений до или после блока кода.
+- От 5 до 30 карточек — сколько в тексте действительно стоит выучить.
+
+ТЕКСТ:
+<<<
 {text}
-"""'''
+>>>
+
+Ответь только блоком кода с карточками.'''
+
+# Сколько текста помещается, чтобы промпт влез в одно сообщение Telegram (4096 символов)
+MAX_TEXT = 4000 - len(PROMPT)
+# По этим фразам узнаём, что пользователь прислал боту сам промпт, а не ответ ИИ
+_PROMPT_MARKERS = ('составитель карточек', 'ЧТО ВЫБИРАТЬ', 'СТРОГИЕ ПРАВИЛА')
 
 _PREFIX = re.compile(r'^\s*(?:[-*•–—]|\d+[.)])\s+')       # «1. », «- », «• »
 _SEPARATOR = re.compile(r'^[\s:\-–—]*$')                   # строка таблицы «---|---»
 _HEADER_WORDS = {'фраза', 'слово', 'выражение', 'phrase', 'word', 'expression'}
+# Граница карточек внутри поля, когда ИИ ответил одним абзацем:
+# «…Мы встретились на лестнице. spoke of» — русский текст, а за ним английская фраза
+_BOUNDARY = re.compile(r"^(?P<ru>.*[А-Яа-яЁё][^A-Za-z]*?)\s+(?P<en>[A-Za-z][A-Za-z0-9\s'’\-]*)$")
 
 
 def build_prompt(text):
-    """Промпт с текстом пользователя внутри."""
+    """Промпт с текстом пользователя внутри. Возвращает (промпт, обрезан ли текст)."""
     text = text.strip()
-    if len(text) > MAX_TEXT:
+    cut = len(text) > MAX_TEXT
+    if cut:
         text = text[:MAX_TEXT].rsplit(' ', 1)[0] + ' …'
-    return PROMPT.format(text=text)
+    return PROMPT.format(text=text), cut
+
+
+def is_prompt(text):
+    """Прислали боту сам промпт (а не ответ ИИ)?"""
+    return sum(marker in text for marker in _PROMPT_MARKERS) >= 2
+
+
+def _split_cards(line):
+    """Строка, в которой склеились несколько карточек, → по строке на карточку."""
+    if line.count('|') <= 4:
+        return [line]
+    cards, fields = [], []
+    for part in (p.strip() for p in line.split('|')):
+        if not part:
+            continue                                   # пустое поле «| |»
+        boundary = _BOUNDARY.match(part) if len(fields) >= 2 else None
+        if boundary:
+            fields.append(boundary.group('ru'))
+            cards.append(' | '.join(fields))
+            fields = [boundary.group('en')]
+        else:
+            fields.append(part)
+    if fields:
+        cards.append(' | '.join(fields))
+    return cards
 
 
 def parse_answer(text):
-    """Строки ответа ИИ → список Card. Пустой список — это не ответ ИИ.
+    """Ответ ИИ → список Card. Пустой список — это не ответ ИИ.
 
-    Лишнее ИИ любит добавлять — всё это пропускается: вступление и пояснения
+    Пропускается всё лишнее, что ИИ любит добавлять: вступление и пояснения
     (в них нет «|»), нумерация, **жирный**, `код`, ```блоки кода```, заголовок
-    и разделитель таблицы, крайние «|» у таблиц в markdown.
+    и разделитель таблицы, крайние «|» у таблиц, пустые поля «| |».
+    Ответ одним абзацем делится на карточки по смене русского текста на английский.
     """
-    cards, seen = [], set()
+    lines = []
     for raw in text.splitlines():
         line = raw.strip()
         if '|' not in line or line.startswith('```'):
             continue
         line = _PREFIX.sub('', line).replace('**', '').replace('`', '').strip().strip('|')
-        parts = [part.strip() for part in line.split('|')]
+        lines += _split_cards(line)
+
+    cards, seen = [], set()
+    for line in lines:
+        parts = [part.strip() for part in line.split('|') if part.strip()]
         if len(parts) < 2 or all(_SEPARATOR.match(part) for part in parts):
             continue
         phrase, translation = parts[0], parts[1]
-        if phrase.lower() in _HEADER_WORDS or not has_latin(phrase) or not translation:
-            continue
-        if phrase.lower() in seen:
+        if phrase.lower() in _HEADER_WORDS or not has_latin(phrase) or phrase.lower() in seen:
             continue
         seen.add(phrase.lower())
         cards.append(Card(

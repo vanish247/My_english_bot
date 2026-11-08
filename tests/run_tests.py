@@ -133,6 +133,8 @@ async def main():
 
     database.init_db()
     sch.scheduler.start()
+    # Тесты не должны зависеть от времени суток: по умолчанию «полдень», а не тихие часы
+    sch._now = lambda: datetime(2026, 11, 8, 12, 0, tzinfo=sch.TIMEZONE)
     failures = []
     passed = [0]
 
@@ -756,15 +758,54 @@ looking for | дубль | x | y
 Надеюсь, помогло!"""
 
     async def t_ai_parse():
-        prompt = ai_prompt.build_prompt('I was waiting for you.')
-        assert 'I was waiting for you.' in prompt and 'фраза | перевод | предложение | перевод предложения' in prompt
-        assert len(ai_prompt.build_prompt('word ' * 2000)) < 4000, 'длинный текст обрезается'
+        prompt, cut = ai_prompt.build_prompt('I was waiting for you.')
+        assert 'I was waiting for you.' in prompt and not cut
+        assert 'фраза | перевод | предложение | перевод предложения' in prompt
+        assert prompt.rstrip().endswith('Ответь только блоком кода с карточками.')
+        long_prompt, cut = ai_prompt.build_prompt('word ' * 3000)
+        assert cut and len(long_prompt) < 4096, 'длинный текст обрезается, промпт влезает в сообщение'
+        assert ai_prompt.is_prompt(prompt) and not ai_prompt.is_prompt(MESSY_AI_ANSWER)
         cards = ai_prompt.parse_answer(MESSY_AI_ANSWER)
         assert [c.phrase for c in cards] == ['looking for', 'put up with', 'Keys'], cards
         assert cards[0].sentence_ru == 'Я искал ключи.' and cards[1].translation.startswith('терпеть')
         assert ai_prompt.parse_answer('apple - яблоко, cat - кот') == [], 'обычные пары — не ответ ИИ'
         assert ai_prompt.parse_answer('Просто текст без черт') == []
     await case('Ответ ИИ разбирается даже с нумерацией, **жирным**, таблицей и лишним текстом', t_ai_parse)
+
+    ONE_LINE_ANSWER = (  # реальный ответ ChatGPT, который пришёл одним абзацем
+        "passed upon | встретились на | We passed upon the stair | Мы встретились на лестнице. spoke of | "
+        "говорили о (чём-то) | We spoke of was and when | Мы говорили о том, что было и когда. came as a surprise | "
+        "стало неожиданностью | Which came as a surprise | Что стало неожиданностью. into his eyes | ему в глаза | | "
+        "I spoke into his eyes | Я произнёс это, глядя ему в глаза. died alone | умер в одиночестве | | "
+        "I thought you died alone | Я думал, ты умер в одиночестве. lost control | потерял контроль | "
+        "We never lost control | Мы никогда не теряли контроль. face to face | лицом к лицу | You’re face to face | "
+        "Ты лицом к лицу. sold the world | продал мир | With the man who sold the world | "
+        "С человеком, который продал мир. shook his hand | пожал ему руку | | I laughed and shook his hand | "
+        "Я рассмеялся и пожал ему руку. made my way back | направился обратно | And made my way back home | "
+        "И отправился обратно домой. searched for | искал (что-то) | | I searched for form and land | "
+        "Я искал форму и землю. roamed | бродил, скитался | For years and years I roamed | Годами я скитался. "
+        "gazed | пристально смотрел | | I gazed a gazeless stare | Я смотрел пустым, ничего не выражающим взглядом. "
+        "a million hills | миллион холмов | We walked a million hills | Мы прошли через миллион холмов.")
+
+    async def t_ai_one_line():
+        cards = ai_prompt.parse_answer(ONE_LINE_ANSWER)
+        assert len(cards) == 14, [c.phrase for c in cards]
+        by = {c.phrase: c for c in cards}
+        assert by['spoke of'] == ai_prompt.Card('spoke of', 'говорили о (чём-то)', 'We spoke of was and when',
+                                                'Мы говорили о том, что было и когда.'), by['spoke of']
+        assert by['into his eyes'].sentence == 'I spoke into his eyes', 'пустое поле «| |» не сдвигает поля'
+        assert by['a million hills'].sentence_ru == 'Мы прошли через миллион холмов.'
+        database.delete_words(UID)
+        texts, _ = await send(msg_update(ONE_LINE_ANSWER), 'paste one-line answer')
+        assert 'Карточки от ИИ: 14' in texts[-1].text, texts[-1].text
+        await send(cb_update('tx:cancel', session.next_id), 'cancel')
+    await case('Ответ ИИ одним абзацем без переносов (реальный ответ ChatGPT) → все 14 карточек', t_ai_one_line)
+
+    async def t_prompt_pasted_back():
+        prompt, _ = ai_prompt.build_prompt('I was waiting for you.')
+        texts, _ = await send(msg_update(prompt), 'prompt pasted back')
+        assert 'Это сам промпт' in texts[-1].text, texts[-1].text
+    await case('Если вставить боту сам промпт — бот подсказывает, что нужен ответ ИИ', t_prompt_pasted_back)
 
     async def t_ai_cards():
         database.delete_words(UID)

@@ -16,6 +16,7 @@ from handlers.dictionary import show_ai_cards, show_for_text
 from handlers.study import study_menu
 from utils import ai_prompt, database
 from utils.database import Word
+from handlers.dictionary import AI_PROMPT_PASTED
 from utils.keyboards import BTN_ADD, add_kb, add_prompt_kb, added_kb, empty_kb, main_menu
 from utils.states import AddWords
 from utils.ui import drop_buttons, show
@@ -72,6 +73,9 @@ async def smart_input(message: Message, state: FSMContext):
             await message.answer(NOT_UNDERSTOOD, reply_markup=main_menu)
         return
 
+    if ai_prompt.is_prompt(text):                 # по ошибке прислали сам промпт, а не ответ ИИ
+        await message.answer(AI_PROMPT_PASTED)
+        return
     cards = ai_prompt.parse_answer(text)          # строки «фраза | перевод | …» — ответ ИИ
     if cards:
         await show_ai_cards(message, cards)

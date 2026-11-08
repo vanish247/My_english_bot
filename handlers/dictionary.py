@@ -323,16 +323,23 @@ async def show_for_text(message: Message, text):
 # ─── Карточки через любой ИИ ───────────────────────────────
 
 AI_HOWTO = (
-    '🤖 <b>Промпт для ИИ</b>\n\n'
-    '1. Нажми на текст ниже — он скопируется\n'
+    '🤖 <b>Карточки через ИИ</b>\n\n'
+    '1. Нажми на промпт ниже — он скопируется\n'
     '2. Вставь его в любой ИИ: ChatGPT, Claude, DeepSeek, Алиса…\n'
-    '3. Ответ ИИ скопируй или перешли сюда — сделаю из него карточки\n\n'
+    '3. ИИ ответит блоком с карточками. Скопируй его кнопкой «Копировать» над блоком '
+    '(так сохранятся переносы строк) и пришли сюда — сделаю карточки'
 )
+AI_PROMPT_PASTED = ('🤖 Это сам промпт 🙂 Вставь его в ИИ — ChatGPT, Claude, DeepSeek, Алису, '
+                    'а сюда пришли <b>ответ</b> ИИ.')
 
 
 async def send_ai_prompt(bot: Bot, user_id, text):
-    """Присылает готовый промпт с текстом пользователя внутри."""
-    await bot.send_message(user_id, AI_HOWTO + f'<pre>{esc(ai_prompt.build_prompt(text))}</pre>')
+    """Присылает инструкцию и отдельным сообщением — промпт с текстом пользователя."""
+    prompt, cut = ai_prompt.build_prompt(text)
+    note = (f'\n\n✂️ Текст длинный — в промпт вошли первые ~{ai_prompt.MAX_TEXT} символов. '
+            'Остальное пришли следующим сообщением.') if cut else ''
+    await bot.send_message(user_id, AI_HOWTO + note)
+    await bot.send_message(user_id, f'<pre>{esc(prompt)}</pre>')
 
 
 @router.callback_query(F.data == 'ai:start')
