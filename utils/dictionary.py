@@ -12,7 +12,7 @@ from collections import namedtuple
 from functools import lru_cache
 from itertools import product
 
-from utils.russian import inflect
+from utils.russian import inflect, lemma as ru_lemma
 
 log = logging.getLogger(__name__)
 
@@ -20,6 +20,7 @@ DICT_PATH = 'dictionary.db'
 SIMPLE_ZIPF = 5.5      # слова частотнее этого считаем слишком простыми для разбора текста
 MAX_TEXT = 3000        # дальше этого символа текст не разбираем
 MAX_ITEMS = 25         # больше кнопок в одном сообщении не показываем
+PRONOUNS = {'i', 'you', 'he', 'she', 'it', 'we', 'they'}
 PER_ENTRY = 3          # значений с одной словарной статьи
 PARTICLES = {'up', 'down', 'out', 'off', 'on', 'in', 'away', 'back', 'over',
              'around', 'about', 'through', 'along'}
@@ -227,6 +228,70 @@ def _is_be_phrase(key):
     return len(parts) == 2 and parts[0] == 'be'
 
 
+@lru_cache(maxsize=50000)
+def _pron(word_lc):
+    try:
+        row = _db().execute('SELECT ipa FROM pron WHERE word_lc = ?', (word_lc,)).fetchone()
+    except sqlite3.OperationalError:          # старый словарь без таблицы произношения
+        return ''
+    return row[0] if row else ''
+
+
+def transcription(text):
+    """Британская транскрипция слова или выражения: «looking for» → /ˈlʊkɪŋ fɔː/.
+
+    Собирается из транскрипций слов. Если хоть одно слово неизвестно — пусто,
+    чтобы не показывать половину.
+    """
+    if not available():
+        return ''
+    _db()
+    words = TOKEN_RE.findall(text.lower())
+    parts = [_pron(w) for w in words]
+    if not words or not all(parts):
+        return ''
+    return '/' + ' '.join(p.strip('/') for p in parts) + '/'
+
+
+def reverse_meanings(text, limit=8):
+    """С русского на английский: «искала» → look for, search, seek.
+
+    Ищем русское слово (и его начальную форму) среди переводов словаря. Выше —
+    английские слова, у которых это главный перевод, затем более частые.
+    Возвращает Meaning, где translation — английское слово.
+    """
+    if not available():
+        return []
+    _db()
+    query = ' '.join(text.lower().replace('ё', 'е').split())
+    if not query:
+        return []
+    keys = {query}
+    if ' ' not in query:
+        keys.add(ru_lemma(query).replace('ё', 'е'))
+    marks = ','.join('?' * len(keys))
+    try:
+        rows = _db().execute(f'''
+            SELECT e.id, e.word, e.pos, e.ipa, e.zipf,
+                   t.rowid = (SELECT MIN(rowid) FROM translations WHERE entry_id = e.id) AS is_main,
+                   (SELECT COUNT(*) FROM entries e2 WHERE e2.word_lc = e.word_lc AND e2.id < e.id) AS rank
+            FROM translations t JOIN entries e ON e.id = t.entry_id
+            WHERE t.ru_lc IN ({marks})''', tuple(keys)).fetchall()
+    except sqlite3.OperationalError:          # старый словарь без поиска по русским словам
+        return []
+    # Выше: это главный перевод слова, и это главная статья слова («собака» → dog,
+    # а не редкое at = «@»), потом более частые слова; DOG (аббревиатура) — после dog
+    rows.sort(key=lambda r: (not r[5], r[6] > 0, r[1].isupper(), -(r[4] or 0)))
+    result, seen = [], set()
+    for entry_id, word, pos, ipa, _, _, _ in rows:
+        if word.lower() in seen:
+            continue
+        seen.add(word.lower())
+        result.append(Meaning(word, POS_RU.get(pos, pos), None,
+                              ipa or transcription(word), _example(entry_id)))
+    return result[:limit]
+
+
 def _sentence_of(text, position):
     for match in SENTENCE_RE.finditer(text):
         if match.start() <= position < match.end():
@@ -248,13 +313,15 @@ def extract(text):
         options = _translations(sources, 1)
         if options:
             found.append((tokens[first].start(), Found(
-                normalize_case(shown), options[0].translation, options[0].ipa,
+                normalize_case(shown), options[0].translation, transcription(shown) or options[0].ipa,
                 _sentence_of(text, tokens[first].start()))))
 
-    # 1. Выражения из 4, 3, 2 слов подряд: «looking forward to», «put up with», «went to bed»
-    for size in (4, 3, 2):
+    # 1. Выражения из 4, 3, 2 слов подряд: «looking forward to», «put up with», «went to bed».
+    #    Выражения с местоимения («it depends») — вторым проходом: в «It depends on you»
+    #    важнее «depends on — зависит от», чем «it depends — бывает по-разному»
+    for size, pronoun_pass in [(n, p) for n in (4, 3, 2) for p in (False, True)]:
         for i in range(len(tokens) - size + 1):
-            if any(j in used for j in range(i, i + size)):
+            if any(j in used for j in range(i, i + size)) or (low[i] in PRONOUNS) != pronoun_pass:
                 continue
             keys = _phrase_keys(low[i:i + size])
             if keys and _has_translation(keys[0]) and not _is_be_phrase(keys[0]):

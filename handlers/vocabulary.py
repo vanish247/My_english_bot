@@ -27,10 +27,14 @@ def _page(user_id, page):
 
     lines = [f'📋 <b>Твой словарь</b> — {words_count(len(words))}', '']
     for number, item in enumerate(words[start:start + PAGE_SIZE], start=start + 1):
-        if item.translation:
-            lines.append(f'{number}. <b>{esc(short(item.word, 40))}</b> — {esc(short(item.translation, 40))}')
+        ipa = f' {esc(short(item.transcription, 40))}' if item.transcription else ''
+        if item.direction == 'ru':          # карточка «с русского» — русское первым
+            lines.append(f'{number}. 🇷🇺 <b>{esc(short(item.translation, 40))}</b> — '
+                         f'{esc(short(item.word, 40))}{ipa}')
+        elif item.translation:
+            lines.append(f'{number}. <b>{esc(short(item.word, 40))}</b>{ipa} — {esc(short(item.translation, 40))}')
         else:
-            lines.append(f'{number}. {esc(short(item.word, 80))}')
+            lines.append(f'{number}. {esc(short(item.word, 80))}{ipa}')
     return '\n'.join(lines), vocabulary_kb(page, pages)
 
 

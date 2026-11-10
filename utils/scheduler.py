@@ -56,11 +56,16 @@ async def send_next_word(bot: Bot, user_id: int):
     # % защищает от выхода за границы, если слов стало меньше
     position = _positions.get(user_id, 0) % len(words)
     item = words[position]
-    text = f'🔔 <b>Повторим слово</b>\n\n🇬🇧 <b>{esc(item.word)}</b>'
-    if item.transcription:
-        text += f'  {esc(item.transcription)}'
-    if item.translation:
-        text += f'\n🇷🇺 <tg-spoiler>{esc(item.translation)}</tg-spoiler>'
+    english = esc(item.word) + (f'  {esc(item.transcription)}' if item.transcription else '')
+    if item.direction == 'ru':          # карточка «с русского»: под спойлером английское
+        text = (f'🔔 <b>Как это по-английски?</b>\n\n🇷🇺 <b>{esc(item.translation)}</b>'
+                f'\n🇬🇧 <tg-spoiler>{english}</tg-spoiler>')
+    else:
+        text = f'🔔 <b>Повторим слово</b>\n\n🇬🇧 <b>{esc(item.word)}</b>'
+        if item.transcription:
+            text += f'  {esc(item.transcription)}'
+        if item.translation:
+            text += f'\n🇷🇺 <tg-spoiler>{esc(item.translation)}</tg-spoiler>'
     if item.example:
         text += f'\n\n💬 <i>{esc(item.example)}</i>'
         if item.example_ru:

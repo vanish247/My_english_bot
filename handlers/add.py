@@ -3,24 +3,31 @@
 Боту можно прислать что угодно — он сам поймёт, что это:
 • пары «слово - перевод»   → добавляет как есть;
 • одно слово или выражение → варианты перевода из словаря (handlers/dictionary.py);
-• текст, пост, песню       → находит в нём слова и выражения, отмечаешь нужные.
+• текст, пост, песню       → находит в нём слова и выражения, отмечаешь нужные;
+• русское слово или текст  → предлагает карточки «с русского на английский»;
+• таблицу или файл         → .txt, .docx (таблица «слово | транскрипция | перевод»
+                             сразу становится парами), .pdf с текстом.
 
 Работает и в режиме «📚 Добавить слова», и просто из главного меню.
 """
-from aiogram import F, Router
+import logging
+import unicodedata
+
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from handlers.dictionary import show_ai_cards, show_for_text
+from handlers.dictionary import AI_PROMPT_PASTED, offer_russian, send_ai_prompt, show_ai_cards, show_for_text
 from handlers.study import study_menu
-from utils import ai_prompt, database
+from utils import ai_prompt, database, dictionary, files
 from utils.database import Word
-from handlers.dictionary import AI_PROMPT_PASTED
 from utils.keyboards import BTN_ADD, add_kb, add_prompt_kb, added_kb, empty_kb, main_menu
 from utils.states import AddWords
 from utils.ui import drop_buttons, show
-from utils.words import esc, has_latin, parse_words, short, words_count
+from utils.words import esc, has_latin, is_russian, parse_words, short, words_count
+
+log = logging.getLogger(__name__)
 
 router = Router()
 
@@ -30,6 +37,8 @@ PROMPT = (
     '🔤 <b>слово</b> — найду перевод в словаре: <code>ubiquitous</code>\n'
     '📖 <b>текст</b>, пост или песню — найду в нём слова и выражения\n'
     '✍️ <b>пары</b> — <code>apple - яблоко, fly - летать</code>\n'
+    '🇷🇺 <b>по-русски</b> — сделаю карточки с русского на английский\n'
+    '📄 <b>файл</b> — .txt, .docx, .pdf; таблицу «слово | транскрипция | перевод» добавлю сразу\n'
     '🤖 или <b>через ИИ</b> — соберу промпт для ChatGPT, Claude, DeepSeek, Алисы, '
     'а из ответа сделаю карточки\n\n'
     'Можно несколькими сообщениями подряд. Когда закончишь — жми «Готово».'
@@ -59,22 +68,26 @@ async def add_from_button(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(StateFilter(None, AddWords.waiting), F.text | F.caption)
+@router.message(StateFilter(None, AddWords.waiting), F.text | F.caption, ~F.document)
 async def smart_input(message: Message, state: FSMContext):
     """Определяет, что прислали: ответ ИИ, пары, слово или текст."""
     text = (message.text or message.caption or '').strip()
     adding = await state.get_state() == AddWords.waiting.state
+    await handle_text(message, text, adding)
 
-    if text.startswith('/') or not has_latin(text):
-        if adding:
-            await message.answer('Жду английское слово, текст или пары «слово - перевод».\n'
-                                 'Или нажми «Готово».', reply_markup=add_kb)
-        else:
-            await message.answer(NOT_UNDERSTOOD, reply_markup=main_menu)
+
+async def handle_text(message: Message, text, adding, from_file=False):
+    """Разбирает текст из сообщения или файла."""
+    if text.startswith('/') or not text:
+        await _not_understood(message, adding)
         return
-
     if ai_prompt.is_prompt(text):                 # по ошибке прислали сам промпт, а не ответ ИИ
         await message.answer(AI_PROMPT_PASTED)
+        return
+    rows = files.table_rows(text)                 # таблица из Word / Excel
+    table = files.parse_table(rows) if rows else []
+    if table:
+        await _add_table(message, table, adding)
         return
     cards = ai_prompt.parse_answer(text)          # строки «фраза | перевод | …» — ответ ИИ
     if cards:
@@ -83,13 +96,52 @@ async def smart_input(message: Message, state: FSMContext):
     pairs, bad = parse_words(text)
     if pairs and any(has_latin(word) for word, _ in pairs) and len(pairs) >= len(bad):
         await _add_pairs(message, pairs, bad, adding)
+    elif _old_menu_button(text):                  # «📖 Учить» из старого меню — даём новое
+        await message.answer('Меню обновилось 👇', reply_markup=main_menu)
+    elif is_russian(text):                        # по-русски → карточки с русского?
+        await offer_russian(message, text)
+    elif not has_latin(text):
+        await _not_understood(message, adding)
     else:
+        if from_file and len(text) > dictionary.MAX_TEXT:
+            await message.answer(
+                f'📄 Текст длинный ({len(text)} символов). Словарём разберу начало, а целиком — '
+                'кнопкой «🤖 Разобрать точнее через ИИ»: разобью текст на несколько промптов.')
         await show_for_text(message, text)
 
 
-async def _add_pairs(message: Message, pairs, bad, adding):
+def _old_menu_button(text):
+    """Кнопка старого меню: значок и пара слов («📖 Учить»)."""
+    return len(text.split()) <= 3 and unicodedata.category(text[0]) == 'So'
+
+
+async def _not_understood(message: Message, adding):
+    if adding:
+        await message.answer('Жду слово, текст, файл или пары «слово - перевод».\n'
+                             'Или нажми «Готово».', reply_markup=add_kb)
+    else:
+        await message.answer(NOT_UNDERSTOOD, reply_markup=main_menu)
+
+
+async def _add_table(message: Message, table, adding):
+    """Таблица «слово | транскрипция | перевод»: пустой перевод берём из словаря."""
+    words, missing = [], []
+    for word, translation, ipa in table:
+        if not translation:
+            found = dictionary.meanings(word, limit=1)
+            translation = found[0].translation if found else ''
+        if translation:
+            words.append(Word(word, translation, ipa, ''))
+        else:
+            missing.append(word)
+    await _add_pairs(message, words, missing, adding, missing_note='⚠️ Не нашёл перевод — пришли парой «слово - перевод»:')
+
+
+async def _add_pairs(message: Message, pairs, bad, adding, missing_note=None):
+    """pairs — [(слово, перевод)] или готовые Word."""
     user_id = message.from_user.id
-    added, duplicates = database.add_words(user_id, [Word(w, t, '', '') for w, t in pairs])
+    words = [item if isinstance(item, Word) else Word(item[0], item[1], '', '') for item in pairs]
+    added, duplicates = database.add_words(user_id, words)
 
     lines = []
     if added:
@@ -99,7 +151,11 @@ async def _add_pairs(message: Message, pairs, bad, adding):
         lines += [''] if lines else []
         lines.append('☑️ Уже были в словаре:')
         lines += _bullets([f'{w.word} — {w.translation}' for w in duplicates])
-    if bad:
+    if bad and missing_note:
+        lines += [''] if lines else []
+        lines.append(missing_note)
+        lines += _bullets(bad)
+    elif bad:
         lines += [''] if lines else []
         lines.append('⚠️ Не понял — между словом и переводом нужен дефис:')
         lines += _bullets(bad)
@@ -109,6 +165,51 @@ async def _add_pairs(message: Message, pairs, bad, adding):
     if adding:
         lines.append('Присылай ещё или жми «Готово».')
     await message.answer('\n'.join(lines), reply_markup=add_kb if adding else added_kb)
+
+
+@router.message(StateFilter(None, AddWords.waiting, AddWords.ai), F.document)
+async def document_input(message: Message, state: FSMContext, bot: Bot):
+    """Прислали файл: .txt, .docx, .pdf, .srt."""
+    document = message.document
+    current = await state.get_state()
+    adding = current == AddWords.waiting.state
+    if not files.kind(document.file_name):
+        await message.answer('📄 Пока понимаю файлы .txt, .docx, .pdf и .srt.',
+                             reply_markup=add_kb if adding else None)
+        return
+    if document.file_size and document.file_size > files.MAX_FILE:
+        await message.answer('📄 Файл больше 5 МБ — пришли его частями.')
+        return
+    try:
+        buffer = await bot.download(document)
+        content = files.read(buffer.read(), document.file_name)
+    except files.FileError as error:
+        await message.answer(f'📄 {error}')
+        return
+    except Exception:
+        log.exception('Не прочитался файл %s', document.file_name)
+        await message.answer('📄 Не получилось прочитать файл. Пришли текст сообщением.')
+        return
+
+    if current == AddWords.ai.state:              # нажали «🤖 Через ИИ» и прислали файл
+        data = await state.get_data()
+        if data.get('ai_prev') == AddWords.waiting.state:
+            await state.set_state(AddWords.waiting)
+        else:
+            await state.clear()
+        text = content.text or '\n'.join(f'{w} — {t}' for w, t, _ in content.pairs)
+        if text.strip():
+            await send_ai_prompt(bot, message.from_user.id, text)
+        else:
+            await message.answer('📄 В файле не нашёл текста.')
+        return
+
+    if content.pairs:
+        await _add_table(message, content.pairs, adding)
+    if content.text.strip():
+        await handle_text(message, content.text.strip(), adding, from_file=True)
+    elif not content.pairs:
+        await message.answer('📄 В файле не нашёл текста.')
 
 
 @router.message(AddWords.waiting)

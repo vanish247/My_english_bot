@@ -31,7 +31,8 @@ def _variants(text):
     """[(слово, перевод, транскрипция, пример, подпись)] для всплывающего списка."""
     if looks_like_word(text):
         word = dictionary.normalize_case(text)
-        return [(word, m.translation, m.ipa, m.example, m.pos + (f', {m.note}' if m.note else ''))
+        ipa = dictionary.transcription(word)
+        return [(word, m.translation, ipa or m.ipa, m.example, m.pos + (f', {m.note}' if m.note else ''))
                 for m in dictionary.meanings(text)]
     return [(f.shown, f.translation, f.ipa, f.sentence, 'из фразы') for f in dictionary.extract(text)]
 

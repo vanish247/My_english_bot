@@ -67,3 +67,10 @@ def esc(text):
 def short(text, limit=60):
     """Обрезает слишком длинный текст, чтобы сообщение не превысило лимит Telegram."""
     return text if len(text) <= limit else text[:limit - 1] + '…'
+
+
+def is_russian(text):
+    """Русский текст: русских букв больше, чем английских."""
+    cyrillic = len(re.findall(r'[А-Яа-яЁё]', text))
+    latin = len(re.findall(r'[A-Za-z]', text))
+    return cyrillic > latin

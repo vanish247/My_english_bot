@@ -2,14 +2,18 @@ import hashlib
 import sqlite3
 from collections import namedtuple
 
-from utils.dictionary import normalize_case
+from utils.dictionary import normalize_case, transcription
 from utils.words import split_pair
 
 DB = 'bot_database.db'
 
 # Одно слово из словаря пользователя.
-# example_ru — перевод примера (его даёт ИИ), id — номер в базе (у слов, прочитанных из базы)
-Word = namedtuple('Word', 'word translation transcription example example_ru id', defaults=('', None))
+#   word — английское слово, translation — русский перевод (для карточек «с русского» тоже);
+#   example_ru — перевод примера; direction — 'en' (учим английское → русское)
+#   или 'ru' (карточка показывает русское, вспоминаем английское);
+#   id — номер в базе (у слов, прочитанных из базы)
+Word = namedtuple('Word', 'word translation transcription example example_ru direction id',
+                  defaults=('', 'en', None))
 
 
 def init_db():
@@ -39,9 +43,15 @@ def init_db():
         # Миграция: раньше слово хранилось одной строкой «apple - яблоко»,
         # теперь слово, перевод, транскрипция и пример — в отдельных колонках
         columns = [row[1] for row in conn.execute('PRAGMA table_info(words)')]
-        for column in ('translation', 'transcription', 'example', 'example_ru'):
+        for column in ('translation', 'transcription', 'example', 'example_ru', 'last_answer'):
             if column not in columns:
                 conn.execute(f"ALTER TABLE words ADD COLUMN {column} TEXT DEFAULT ''")
+        if 'direction' not in columns:
+            conn.execute("ALTER TABLE words ADD COLUMN direction TEXT DEFAULT 'en'")
+        # Ответы в карточках: «Знаю» / «Не знаю» — для режима «Только незнакомые» и статистики
+        for column in ('know_count', 'dontknow_count'):
+            if column not in columns:
+                conn.execute(f'ALTER TABLE words ADD COLUMN {column} INTEGER DEFAULT 0')
         old_rows = conn.execute(
             "SELECT id, word FROM words WHERE translation = '' AND word LIKE '%-%'").fetchall()
         for row_id, text in old_rows:
@@ -69,6 +79,8 @@ def init_db():
             CREATE TABLE IF NOT EXISTS ai_texts (
                 user_id INTEGER PRIMARY KEY, text TEXT, created_at TEXT DEFAULT (datetime('now')))
         ''')
+        if 'direction' not in [row[1] for row in conn.execute('PRAGMA table_info(ai_texts)')]:
+            conn.execute("ALTER TABLE ai_texts ADD COLUMN direction TEXT DEFAULT 'en'")
 
         # Фразы из inline-режима нужны, только пока человек жмёт «📥» — неделю храним, потом чистим
         conn.execute("DELETE FROM inline_texts WHERE created_at < datetime('now', '-7 days')")
@@ -79,7 +91,13 @@ def init_db():
             if fixed != word:
                 conn.execute('UPDATE words SET word = ? WHERE id = ?', (fixed, row_id))
         conn.execute('DELETE FROM words WHERE id NOT IN '
-                     '(SELECT MIN(id) FROM words GROUP BY user_id, word, translation)')
+                     '(SELECT MIN(id) FROM words GROUP BY user_id, word, translation, direction)')
+
+        # Транскрипция у всех слов: дописываем тем, у кого её нет
+        for row_id, word in conn.execute("SELECT id, word FROM words WHERE transcription = ''").fetchall():
+            ipa = transcription(word)
+            if ipa:
+                conn.execute('UPDATE words SET transcription = ? WHERE id = ?', (ipa, row_id))
 
 
 def init_user(user_id: int, username: str):
@@ -95,39 +113,79 @@ def add_words(user_id: int, words: list):
     """Добавляет слова (список Word), пропуская те, что уже есть в словаре.
 
     Повтор — то же слово с тем же переводом: «found — основывать» и
-    «found — находить» — два разных значения, оба добавятся.
+    «found — находить» — два разных значения, оба добавятся. Карточка
+    «с русского» (dog ← собака) — не повтор английской (dog → собака).
     Возвращает (добавленные, повторы).
     """
     def key(item):
-        return item.word.lower(), item.translation.lower()
+        return item.word.lower(), item.translation.lower(), item.direction or 'en'
 
     existing = {key(w) for w in get_words(user_id)}
     added, duplicates = [], []
     with sqlite3.connect(DB) as conn:
         for item in words:
             item = item._replace(word=normalize_case(item.word))   # Tomorrow → tomorrow
+            if not item.transcription:
+                item = item._replace(transcription=transcription(item.word))   # транскрипция — всегда
             if key(item) in existing:
                 duplicates.append(item)
                 continue
             conn.execute(
-                'INSERT INTO words (user_id, word, translation, transcription, example, example_ru) '
-                'VALUES (?, ?, ?, ?, ?, ?)',
-                (user_id, item.word, item.translation, item.transcription, item.example, item.example_ru)
+                'INSERT INTO words (user_id, word, translation, transcription, example, example_ru, direction) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (user_id, item.word, item.translation, item.transcription, item.example, item.example_ru,
+                 item.direction or 'en')
             )
             existing.add(key(item))
             added.append(item)
     return added, duplicates
 
 
-def get_words(user_id: int) -> list:
-    """Все слова пользователя (список Word) в порядке добавления"""
+def get_words(user_id: int, only_unknown=False) -> list:
+    """Слова пользователя (список Word) в порядке добавления.
+    only_unknown — только незнакомые: последний ответ не «Знаю» (или ещё не учили)."""
+    condition = " AND last_answer != 'know'" if only_unknown else ''
     with sqlite3.connect(DB) as conn:
         rows = conn.execute(
-            'SELECT word, translation, transcription, example, example_ru, id FROM words '
-            'WHERE user_id = ? ORDER BY id',
+            'SELECT word, translation, transcription, example, example_ru, direction, id FROM words '
+            f'WHERE user_id = ?{condition} ORDER BY id',
             (user_id,)
         ).fetchall()
-    return [Word(*(value or '' for value in row[:5]), id=row[5]) for row in rows]
+    return [Word(*(value or '' for value in row[:5]), direction=row[5] or 'en', id=row[6]) for row in rows]
+
+
+def record_answer(user_id: int, word_id: int, known: bool):
+    """Запоминает ответ в карточке: «Знаю» или «Не знаю / Пропустить»."""
+    column = 'know_count' if known else 'dontknow_count'
+    with sqlite3.connect(DB) as conn:
+        conn.execute(f'UPDATE words SET last_answer = ?, {column} = {column} + 1 WHERE id = ? AND user_id = ?',
+                     ('know' if known else 'dontknow', word_id, user_id))
+
+
+def word_stats(user_id: int):
+    """(всего, знаю, не знаю, ещё не учил)"""
+    with sqlite3.connect(DB) as conn:
+        rows = dict(conn.execute('SELECT last_answer, COUNT(*) FROM words WHERE user_id = ? GROUP BY last_answer',
+                                 (user_id,)).fetchall())
+    known, unknown, new = rows.get('know', 0), rows.get('dontknow', 0), rows.get('', 0) + rows.get(None, 0)
+    return known + unknown + new, known, unknown, new
+
+
+def hard_words(user_id: int, limit=20) -> list:
+    """Слова, на которые последний ответ «Не знаю»: чаще забываемые — выше."""
+    with sqlite3.connect(DB) as conn:
+        rows = conn.execute(
+            'SELECT word, translation, transcription, example, example_ru, direction, id FROM words '
+            "WHERE user_id = ? AND last_answer = 'dontknow' ORDER BY dontknow_count DESC, id LIMIT ?",
+            (user_id, limit)).fetchall()
+    return [Word(*(value or '' for value in row[:5]), direction=row[5] or 'en', id=row[6]) for row in rows]
+
+
+def update_word(user_id: int, word_id: int, word: str):
+    """Исправляет английскую сторону карточки (у карточек «с русского»)"""
+    with sqlite3.connect(DB) as conn:
+        conn.execute('UPDATE words SET word = ?, transcription = ? WHERE id = ? AND user_id = ?',
+                     (word, transcription(word), word_id, user_id))
 
 
 def update_translation(user_id: int, word_id: int, translation: str):
@@ -227,17 +285,19 @@ def get_inline_text(text_id):
     return row[0] if row else None
 
 
-def save_ai_text(user_id: int, text: str):
-    """Запоминает текст, из которого собран промпт для ИИ (храним только последний)."""
+def save_ai_text(user_id: int, text: str, direction: str = 'en'):
+    """Запоминает текст, из которого собран промпт для ИИ (храним только последний),
+    и направление: 'en' — английский текст, 'ru' — русский (карточки с русского)."""
     with sqlite3.connect(DB) as conn:
-        conn.execute("INSERT OR REPLACE INTO ai_texts (user_id, text, created_at) "
-                     "VALUES (?, ?, datetime('now'))", (user_id, text))
+        conn.execute("INSERT OR REPLACE INTO ai_texts (user_id, text, direction, created_at) "
+                     "VALUES (?, ?, ?, datetime('now'))", (user_id, text, direction))
 
 
 def get_ai_text(user_id: int):
+    """(текст последнего промпта, направление) или (None, 'en')."""
     with sqlite3.connect(DB) as conn:
-        row = conn.execute('SELECT text FROM ai_texts WHERE user_id = ?', (user_id,)).fetchone()
-    return row[0] if row else None
+        row = conn.execute('SELECT text, direction FROM ai_texts WHERE user_id = ?', (user_id,)).fetchone()
+    return (row[0], row[1] or 'en') if row else (None, 'en')
 
 
 def get_mailings() -> list:

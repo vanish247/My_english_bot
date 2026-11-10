@@ -22,7 +22,7 @@ if os.path.exists(os.path.join(ROOT, 'dictionary.db')):          # словар�
 os.environ['BOT_TOKEN'] = '123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 
 from aiogram.client.session.base import BaseSession  # noqa: E402
-from aiogram.types import (Chat, InlineKeyboardMarkup, Message,  # noqa: E402
+from aiogram.types import (Chat, File, InlineKeyboardMarkup, Message,  # noqa: E402
                            ReplyKeyboardMarkup, User)
 
 UID = 555
@@ -34,6 +34,7 @@ class FakeSession(BaseSession):
         super().__init__()
         self.calls = []
         self.next_id = 1000
+        self.files = {}          # file_id → содержимое файла для bot.download()
 
     async def make_request(self, bot, method, timeout=None):
         self.calls.append(method)
@@ -47,10 +48,12 @@ class FakeSession(BaseSession):
                            chat=Chat(id=method.chat_id, type='private'), text=method.text)
         if name == 'GetMe':
             return User(id=BOT_ID, is_bot=True, first_name='Bot', username='Allomisha_bot')
+        if name == 'GetFile':
+            return File(file_id=method.file_id, file_unique_id=method.file_id, file_path=method.file_id)
         return True
 
-    async def stream_content(self, *a, **k):
-        raise NotImplementedError
+    async def stream_content(self, url, *a, **k):
+        yield self.files[url.rsplit('/', 1)[1]]
 
     async def close(self):
         pass
@@ -185,13 +188,17 @@ async def main():
 
     async def t_dash_idle():
         texts, _ = await send(msg_update('привет - пока'), 'dash idle')
-        assert 'Не понял' in texts[-1].text
+        assert 'с русского на английский' in texts[-1].text, texts[-1].text
     await case('Текст с дефисом вне режима добавления → бот отвечает (раньше молчал)', t_dash_idle)
 
     async def t_yes_idle():
         texts, _ = await send(msg_update('да'), 'yes idle')
+        assert 'с русского на английский' in texts[-1].text
+        texts, _ = await send(cb_update('ru:no', session.next_id), 'ru no')
+        assert 'Хорошо' in texts[-1].text
+        texts, _ = await send(msg_update('🙂'), 'emoji idle')
         assert isinstance(texts[-1].reply_markup, ReplyKeyboardMarkup)
-    await case('«да» вне диалога → меню, а не «используй формат»', t_yes_idle)
+    await case('Русское вне диалога → «Делаем карточки с русского?», «Нет» → подсказка', t_yes_idle)
 
     async def t_add():
         texts, _ = await send(msg_update('📚 Добавить слова'), 'add start')
@@ -260,7 +267,7 @@ async def main():
         mid = session.next_id
         assert 'Как будем учить' in texts[-1].text and '3 слова' in texts[-1].text, texts[-1].text
         data = [b.callback_data for row in texts[-1].reply_markup.inline_keyboard for b in row]
-        assert data == ['study:cards', 'study:shuffle', 'study:mailing', 'voc:page:0'], data
+        assert data == ['study:cards', 'study:shuffle', 'study:mailing', 'study:stats', 'voc:page:0'], data
         texts, _ = await send(cb_update('study:cards', mid), 'cards')
         assert 'Карточка 1 из 3' in texts[-1].text and '🇷🇺' not in texts[-1].text
         front = [b.callback_data for row in texts[-1].reply_markup.inline_keyboard for b in row]
@@ -490,6 +497,17 @@ async def main():
     def kb_text(msg):
         return [b.text for row in msg.reply_markup.inline_keyboard for b in row]
 
+    LISTED = re.compile(r'^\d+\. (?:🇷🇺 )?(?:<b>)?(?P<a>.+?)(?:</b>)?(?P<ipa> /[^/]*/)? — (?:<b>)?(?P<b>.+?)(?:</b>)?(?P<ipa2> /[^/]*/)?$')
+
+    def listed(msg):
+        """Строки списка на экране «Нашёл в тексте» → [(первое, второе, транскрипция)]."""
+        result = []
+        for line in msg.text.splitlines():
+            m = LISTED.match(line)
+            if m:
+                result.append((m['a'], m['b'], (m['ipa'] or m['ipa2'] or '').strip()))
+        return result
+
     async def t_card_fields():
         database.delete_words(UID)
         database.add_words(UID, [database.Word('apple', 'яблоко', '/ˈæp.əl/', 'An apple a day.')])
@@ -540,9 +558,10 @@ async def main():
                 print('  ⚠️  pymorphy3 не установлен — проверка русских форм пропущена')
                 return
             expect = {'went': 'шёл', 'found': 'нашёл', 'saw': 'видел', 'keys': 'ключи',
-                      'goes': 'идёт', 'took': 'взял', 'children': 'дети'}
+                      'goes': 'идёт', 'children': 'дети'}
             got = {w: dic.meanings(w)[0].translation for w in expect}
             assert got == expect, got
+            assert dic.meanings('took')[0].translation in ('взял', 'брал')
             assert dic.meanings('put up with')[0].translation.startswith('терпеть')
             labels = [m.translation for m in dic.meanings('went')]
             assert not any(l.startswith('очеред') for l in labels), 'у формы глагола нет существительных'
@@ -573,7 +592,7 @@ async def main():
             assert 'Добавил' in texts[-1].text
             assert ('qwertyzz', 'моё слово') in [(w.word, w.translation) for w in database.get_words(UID)]
             texts, _ = await send(msg_update('ещё текст'), 'after own')
-            assert 'Не понял' in texts[-1].text, 'после своего перевода бот возвращается в обычный режим'
+            assert 'с русского' in texts[-1].text, 'после своего перевода бот возвращается в обычный режим'
         await case('Нет в словаре → «Свой перевод»; кнопки меню при этом работают', t_lookup_own)
 
         async def t_own_in_add_mode():
@@ -592,10 +611,12 @@ async def main():
                     "I turned the music off and went to bed.")
             texts, _ = await send(msg_update(text), 'extract')
             mid = session.next_id
-            labels = kb_text(texts[-1])
-            assert any('looking for — искать' in l for l in labels), labels
-            assert any('turned off' in l for l in labels) and any('went to bed' in l for l in labels), labels
-            assert not any('couch' in l for l in labels), 'слова из словаря не предлагаются'
+            items = {a: (b, ipa) for a, b, ipa in listed(texts[-1])}
+            assert items['looking for'][0].startswith('искать'), items
+            assert items['looking for'][1] == '/ˈlʊkɪŋ fɔː/', 'транскрипция у выражения'
+            assert 'turned off' in items and 'went to bed' in items, items
+            assert 'couch' not in items, 'слова из словаря не предлагаются'
+            assert any(l.endswith('looking for') for l in kb_text(texts[-1])), kb_text(texts[-1])
             assert 'уже есть в твоём словаре' in texts[-1].text
             _, answers = await send(cb_update('tx:add', mid), 'add nothing')
             assert 'Сначала отметь' in answers[-1].text
@@ -644,7 +665,7 @@ async def main():
         async def t_short_phrase():
             texts, _ = await send(msg_update('waiting for people to'), 'short phrase not in dictionary')
             assert 'Нашёл в тексте' in texts[-1].text, texts[-1].text
-            assert any('waiting for — ждать' in l for l in kb_text(texts[-1])), kb_text(texts[-1])
+            assert any(a == 'waiting for' and b.startswith('ждать') for a, b, _ in listed(texts[-1])), texts[-1].text
             await send(cb_update('tx:cancel', session.next_id), 'cancel')
             texts, _ = await send(msg_update('waiting for'), 'phrase itself')
             assert kb_text(texts[-1])[0].startswith('ждать (кого-то'), kb_text(texts[-1])
@@ -876,8 +897,7 @@ looking for | дубль | x | y
         await send(msg_update(source), 'source text')
         answer = '\n'.join(f'{c.phrase} | {c.translation} | {c.sentence} | перевод' for c in shuffled)
         texts, _ = await send(msg_update(answer), 'shuffled AI answer')
-        labels = [b.text for row in texts[-1].reply_markup.inline_keyboard for b in row if b.callback_data[3:].isdigit()]
-        phrases = [l.split(' — ')[0][2:] for l in labels]
+        phrases = [a for a, _, _ in listed(texts[-1])]
         assert phrases == ['walking in the park', 'came across', 'catch up', 'kept on', 'made up'], phrases
         mid = session.next_id
         await send(cb_update('tx:3', mid), 'pick kept on')
@@ -909,6 +929,235 @@ looking for | дубль | x | y
         finally:
             dic.DICT_PATH = saved
     await case('Без dictionary.db бот не падает и предлагает ввести перевод сам', t_no_dictionary)
+
+    # ───────── «Только незнакомые» и статистика ─────────
+    async def t_unknown_mode():
+        database.delete_words(UID)
+        database.add_words(UID, [database.Word(w, t, '', '') for w, t in
+                                 [('apple', 'яблоко'), ('cat', 'кот'), ('dog', 'собака')]])
+        await send(msg_update('🎴 Учить'), 'study')
+        mid = session.next_id
+        assert 'study:unknown' not in cb_list(session.calls[-1]), 'пока ничего не учили — кнопки нет'
+        await send(cb_update('study:cards', mid), 'cards')
+        for answer in ('study:know', 'study:dontknow', 'study:know'):
+            await send(cb_update('study:reveal', mid), 'reveal')
+            await send(cb_update(answer, mid), answer)
+        texts, _ = await send(cb_update('study:menu', mid), 'menu after')
+        assert 'Знаю: 2 · 🔁 Не знаю: 1 · 🆕 Новых: 0' in texts[-1].text, texts[-1].text
+        assert '❓ Только незнакомые (1)' in kb_text(texts[-1]), kb_text(texts[-1])
+        texts, _ = await send(cb_update('study:unknown', mid), 'unknown only')
+        assert 'Карточка 1 из 1' in texts[-1].text and 'cat' in texts[-1].text, texts[-1].text
+        await send(cb_update('study:reveal', mid), 'reveal')
+        texts, _ = await send(cb_update('study:know', mid), 'know cat')
+        assert cb_list(texts[-1])[0] == 'study:unknown', '«Ещё раз» — снова незнакомые'
+        texts, _ = await send(cb_update('study:unknown', mid), 'again unknown')
+        assert 'Незнакомых не осталось' in texts[-1].text, texts[-1].text
+    await case('«Знаю / Не знаю» запоминаются → «❓ Только незнакомые (N)» → «Незнакомых не осталось»', t_unknown_mode)
+
+    async def t_stats():
+        database.delete_words(UID)
+        database.add_words(UID, [database.Word('look for', 'искать', '', ''), database.Word('cat', 'кот', '', '')])
+        words = database.get_words(UID)
+        database.record_answer(UID, words[0].id, False)
+        database.record_answer(UID, words[1].id, True)
+        texts, _ = await send(cb_update('study:stats', 5), 'stats')
+        t = texts[-1].text
+        assert texts[-1].reply_markup is None, 'без кнопок — удобно переслать'
+        assert 'Всего: 2 слова' in t and 'Знаю: 1' in t and 'Не знаю: 1' in t, t
+        assert 'Трудные слова' in t and 'look for' in t and 'искать' in t and 'cat' not in t.split('Трудные')[1], t
+    await case('📊 Статистика отдельным сообщением: сколько знаю / не знаю, трудные слова', t_stats)
+
+    async def t_transcription_everywhere():
+        if not dic.available():
+            return
+        database.delete_words(UID)
+        texts, _ = await send(msg_update('ubiquitous'), 'lookup ipa')
+        assert '/juːˈbɪkwɪtəs/' in texts[-1].text, texts[-1].text
+        await send(cb_update('lk:0', session.next_id), 'pick')
+        database.add_words(UID, [database.Word('looking for', 'искал', '', '')])
+        ipas = {w.word: w.transcription for w in database.get_words(UID)}
+        assert ipas == {'ubiquitous': '/juːˈbɪkwɪtəs/', 'looking for': '/ˈlʊkɪŋ fɔː/'}, ipas
+        texts, _ = await send(msg_update('📋 Мои слова'), 'vocab ipa')
+        assert '/ˈlʊkɪŋ fɔː/' in texts[-1].text, texts[-1].text
+        sch._positions[UID] = 1
+        before = len(session.calls)
+        await sch.send_next_word(bot, UID)
+        assert '/ˈlʊkɪŋ fɔː/' in session.calls[before:][-1].text
+        ans = await inline_answer('ubiquitous')
+        assert '/juːˈbɪkwɪtəs/' in ans.results[0].description
+        import sqlite3
+        with sqlite3.connect(database.DB) as conn:          # старое слово без транскрипции
+            conn.execute("UPDATE words SET transcription = '' WHERE user_id = ?", (UID,))
+        database.init_db()
+        assert all(w.transcription for w in database.get_words(UID)), 'транскрипция дописывается старым словам'
+    await case('Транскрипция везде: экран слова, словарь, рассылка, inline, старые слова', t_transcription_everywhere)
+
+    # ───────── С русского на английский ─────────
+    async def t_ru_word():
+        if not dic.available():
+            return
+        database.delete_words(UID)
+        texts, _ = await send(msg_update('собака'), 'russian word')
+        assert 'с русского на английский' in texts[-1].text and 'ru:yes' in cb_list(texts[-1])
+        mid = session.next_id
+        texts, _ = await send(cb_update('ru:yes', mid), 'ru yes')
+        assert '🇷🇺 <b>собака</b>' in texts[-1].text, texts[-1].text
+        assert kb_text(texts[-1])[0].startswith('dog /dɒɡ/'), kb_text(texts[-1])
+        await send(cb_update('rk:0', mid), 'pick dog')
+        w = database.get_words(UID)[0]
+        assert (w.word, w.translation, w.direction, w.transcription) == ('dog', 'собака', 'ru', '/dɒɡ/'), w
+        database.add_words(UID, [database.Word('dog', 'собака', '', '')])
+        assert database.count_words(UID) == 2, 'английская карточка dog → собака — не повтор русской'
+        database.delete_words(UID)
+        database.add_words(UID, [w])
+        await send(msg_update('🎴 Учить'), 'study ru')
+        m2 = session.next_id
+        texts, _ = await send(cb_update('study:cards', m2), 'ru card')
+        assert '🇷🇺 <b>собака</b>' in texts[-1].text and 'dog' not in texts[-1].text, texts[-1].text
+        assert 'по-английски' in texts[-1].text
+        texts, _ = await send(cb_update('study:reveal', m2), 'ru reveal')
+        assert '🇬🇧 <b>dog</b>  /dɒɡ/' in texts[-1].text, texts[-1].text
+        await send(cb_update('study:edit', m2), 'ru edit')
+        texts, _ = await send(msg_update('собачка'), 'ru edit cyrillic')
+        assert 'по-английски' in texts[-1].text
+        texts, _ = await send(msg_update('hound'), 'ru edit latin')
+        assert 'Исправил' in texts[-1].text and 'hound' in texts[-1].text
+        w = database.get_words(UID)[0]
+        assert (w.word, w.translation) == ('hound', 'собака'), w
+        await send(cb_update('study:stop', session.next_id), 'stop')
+        texts, _ = await send(msg_update('📋 Мои слова'), 'vocab ru')
+        assert '🇷🇺 <b>собака</b> — hound' in texts[-1].text, texts[-1].text
+        sch._positions[UID] = 0
+        before = len(session.calls)
+        await sch.send_next_word(bot, UID)
+        sent = session.calls[before:][-1].text
+        assert 'по-английски' in sent and '<tg-spoiler>hound' in sent, sent
+    await case('Русское слово → «с русского?» → dog → карточка: русское спереди, английское на обороте', t_ru_word)
+
+    async def t_ru_own():
+        database.delete_words(UID)
+        await send(msg_update('абырвалг'), 'russian unknown')
+        mid = session.next_id
+        texts, _ = await send(cb_update('ru:yes', mid), 'ru yes')
+        assert 'rk:own' in cb_list(texts[-1]) and 'rk:ai' in cb_list(texts[-1])
+        texts, _ = await send(cb_update('rk:own', mid), 'own en')
+        assert 'как по-английски' in texts[-1].text
+        texts, _ = await send(msg_update('по-русски'), 'own cyrillic')
+        assert 'латиницей' in texts[-1].text
+        texts, _ = await send(msg_update('fish'), 'own latin')
+        assert 'Добавил' in texts[-1].text
+        w = database.get_words(UID)[0]
+        assert (w.word, w.translation, w.direction) == ('fish', 'абырвалг', 'ru'), w
+        texts, _ = await send(cb_update('rk:ai', mid), 'ru ai from word')
+        assert 'с русского на английский' in texts[0].text and 'английская фраза' in texts[-1].text
+    await case('Русское слово, которого нет в словаре → свой английский вариант или ИИ', t_ru_own)
+
+    async def t_ru_text_ai():
+        database.delete_words(UID)
+        source = 'Я весь день искала ключи. Новость свалилась как снег на голову.'
+        texts, _ = await send(msg_update(source), 'russian text')
+        mid = session.next_id
+        texts, _ = await send(cb_update('ru:yes', mid), 'ru yes text')
+        assert 'английская фраза | русская фраза' in texts[-1].text and 'искала ключи' in texts[-1].text
+        assert ai_prompt.is_prompt(ai_prompt.build_prompts(source, 'ru')[0])
+        answer = ('out of the blue | как снег на голову | The news came out of the blue. | Новость свалилась как снег на голову.\n'
+                  'was looking for | искала | I was looking for my keys all day. | Я весь день искала ключи.')
+        texts, _ = await send(msg_update(answer), 'ru AI answer')
+        assert 'Карточки от ИИ с русского: 2' in texts[-1].text, texts[-1].text
+        assert [(a, b) for a, b, _ in listed(texts[-1])] == [('искала', 'was looking for'),
+                                                           ('как снег на голову', 'out of the blue')], texts[-1].text
+        assert kb_text(texts[-1])[0].endswith('искала'), 'на кнопке — русская сторона'
+        m2 = session.next_id
+        await send(cb_update('tx:all', m2), 'all')
+        await send(cb_update('tx:add', m2), 'add')
+        got = [(w.word, w.translation, w.direction, w.example_ru) for w in database.get_words(UID)]
+        assert got[0] == ('was looking for', 'искала', 'ru', 'Я весь день искала ключи.'), got
+    await case('Русский текст → промпт «с русского» → ответ ИИ → карточки с русского в порядке текста', t_ru_text_ai)
+
+    # ───────── Длинный текст — несколько промптов ─────────
+    async def t_long_prompts():
+        sentence = 'She was looking forward to the weekend because she wanted to get away from it all. '
+        await send(msg_update('/add'), 'add')
+        await send(cb_update('ai:start', session.next_id), 'ai start')
+        texts, _ = await send(msg_update(sentence * 60), 'long text')
+        prompts = [t for t in texts if '<pre>' in t.text]
+        assert len(prompts) >= 3, len(prompts)
+        assert f'Промпт 1 из {len(prompts)}' in prompts[0].text and 'разбил на' in texts[0].text
+        assert all(len(t.text) <= 4096 for t in texts)
+        joined = ' '.join(re.sub(r'<[^>]+>', '', t.text) for t in prompts)
+        assert joined.count('looking forward to') == 60, 'ни одно предложение не потерялось'
+        await send(cb_update('add:done', session.next_id), 'done')
+        chunks = ai_prompt.split_text('word ' * 5000, 1000)
+        assert all(len(c) <= 1000 for c in chunks) and sum(c.count('word') for c in chunks) == 5000
+    await case('Длинный текст → «Промпт 1 из N», каждый влезает в сообщение, ничего не теряется', t_long_prompts)
+
+    # ───────── Таблицы и файлы ─────────
+    def doc_update(file_name, data):
+        uid_counter[0] += 1
+        file_id = f'file{uid_counter[0]}'
+        session.files[file_id] = data
+        return {'update_id': uid_counter[0], 'message': {
+            'message_id': uid_counter[0], 'date': int(time.time()), 'chat': {'id': UID, 'type': 'private'},
+            'from': user(), 'document': {'file_id': file_id, 'file_unique_id': file_id,
+                                         'file_name': file_name, 'file_size': len(data)}}}
+
+    def make_docx(paragraphs, rows):
+        import io
+        import zipfile
+        W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+        p = lambda t: f'<w:p><w:r><w:t>{t}</w:t></w:r></w:p>'
+        table = '<w:tbl>' + ''.join('<w:tr>' + ''.join(f'<w:tc>{p(c)}</w:tc>' for c in r) + '</w:tr>'
+                                    for r in rows) + '</w:tbl>'
+        xml = f'<w:document xmlns:w="{W}"><w:body>{"".join(map(p, paragraphs))}{table}</w:body></w:document>'
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as z:
+            z.writestr('word/document.xml', xml)
+        return buf.getvalue()
+
+    async def t_table_paste():
+        database.delete_words(UID)
+        texts, _ = await send(msg_update('apple\t[ˈæpl]\tяблоко\nlook for\t/lʊk fɔː/\tискать'), 'tsv paste')
+        assert 'Добавил 2 слова' in texts[-1].text, texts[-1].text
+        got = {w.word: (w.translation, w.transcription) for w in database.get_words(UID)}
+        assert got == {'apple': ('яблоко', '[ˈæpl]'), 'look for': ('искать', '/lʊk fɔː/')}, got
+        texts, _ = await send(msg_update('cat | /kæt/ | кот\ndog | /dɒɡ/ | собака'), 'pipe table with ipa')
+        assert 'Добавил 2 слова' in texts[-1].text, 'таблица через | с транскрипцией — не ответ ИИ'
+    await case('Таблица из Word/Excel сообщением: «слово ⇥ транскрипция ⇥ перевод» → пары', t_table_paste)
+
+    async def t_docx_file():
+        database.delete_words(UID)
+        data = make_docx(['Homework for Monday'], [['Word', 'Transcription', 'Translation'],
+                                                   ['apple', '[ˈæpl]', 'яблоко'],
+                                                   ['ubiquitous', '', ''],
+                                                   ['qwertyzz', '/kw/', '']])
+        texts, _ = await send(doc_update('урок.docx', data), 'docx table')
+        added = [t for t in texts if 'Добавил' in t.text][0].text
+        assert 'apple' in added and ('ubiquitous' in added or not dic.available()), added
+        assert 'Не нашёл перевод' in added and 'qwertyzz' in added, added
+        words = {w.word: w for w in database.get_words(UID)}
+        if dic.available():
+            assert words['ubiquitous'].translation == 'вездесущий', 'пустой перевод — из словаря'
+        assert words['apple'].transcription == '[ˈæpl]', 'транскрипция — как у репетитора'
+        assert any(k in t.text.lower() for t in texts[1:] for k in ('homework', 'не нашёл', 'не подключён')), \
+            'текст вне таблицы тоже разбирается'
+    await case('Файл .docx с таблицей репетитора → пары; пустой перевод берётся из словаря', t_docx_file)
+
+    async def t_other_files():
+        texts, _ = await send(doc_update('song.txt', 'Я весь день искала ключи.'.encode('cp1251')), 'russian txt')
+        assert 'с русского на английский' in texts[-1].text, 'txt в cp1251 тоже читается'
+        texts, _ = await send(doc_update('scan.pdf', b'%PDF-1.4 broken'), 'broken pdf')
+        assert 'PDF' in texts[-1].text
+        texts, _ = await send(doc_update('photo.jpg', b'xx'), 'jpg')
+        assert 'Пока понимаю' in texts[-1].text
+        srt = b'1\n00:00:01,000 --> 00:00:03,000\nI gave up on my dreams.\n'
+        texts, _ = await send(doc_update('film.srt', srt), 'srt')
+        assert '00:00' not in texts[-1].text
+        await send(msg_update('/add'), 'add')
+        await send(cb_update('ai:start', session.next_id), 'ai start')
+        texts, _ = await send(doc_update('story.txt', b'I was looking for my keys all morning.'), 'file for AI')
+        assert '<pre>' in texts[-1].text and 'looking for my keys' in texts[-1].text, 'файл в режиме «Через ИИ» → промпт'
+        await send(cb_update('add:done', session.next_id), 'done')
+    await case('Файлы: русский .txt → «с русского?», битый PDF и .jpg → понятный ответ, .srt, файл → ИИ', t_other_files)
 
     sch.scheduler.shutdown(wait=False)
     print(f'\nИТОГ: {passed[0]} прошло, {len(failures)} упало')

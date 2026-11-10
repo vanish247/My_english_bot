@@ -64,3 +64,13 @@ def inflect(translation, pos, tags):
         return translation
     word = result.word.capitalize() if first[:1].isupper() else result.word
     return f'{word} {rest}' if rest else word
+
+
+def lemma(word):
+    """Начальная форма русского слова: «искала» → «искать», «ключи» → «ключ».
+    Без pymorphy3 — само слово."""
+    morph = _analyzer()
+    word = word.strip().lower()
+    if morph is None or not word:
+        return word
+    return morph.parse(word)[0].normal_form
