@@ -4,6 +4,8 @@
 • Прислали текст → экран с найденными словами и выражениями, отмечаешь галочками.
 • Прислали русское → «Делаем карточки с русского на английский?»: слово ищем
   в словаре наоборот, текст отправляем в ИИ отдельным промптом.
+• «✏️ Править» на экране с галочками — исправить карточку ещё до добавления:
+  слово, перевод, транскрипцию, пример.
 
 Каждый экран — одно сообщение с кнопками. Что на нём показано (варианты,
 найденные слова, отметки) храним в памяти по номеру сообщения. После
@@ -14,7 +16,7 @@ from collections import OrderedDict
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from utils import ai_prompt, database, dictionary
 from utils.database import Word
@@ -189,12 +191,12 @@ async def own_translation_not_text(message: Message):
 
 # ─── Слова из текста ───────────────────────────────────────
 
-def _item_lines(items, direction, with_ipa=True):
+def _item_lines(items, direction, with_ipa=True, width=35):
     """Список находок с транскрипцией: «1. looking for /ˈlʊkɪŋ fɔː/ — искал»."""
     lines = []
     for number, item in enumerate(items, start=1):
         ipa = f' {esc(short(item.ipa, 30))}' if with_ipa and item.ipa else ''
-        english, russian = esc(short(item.shown, 35)), esc(short(item.translation, 35))
+        english, russian = esc(short(item.shown, width)), esc(short(item.translation, width))
         if direction == 'ru':
             lines.append(f'{number}. 🇷🇺 {russian} — <b>{english}</b>{ipa}')
         else:
@@ -215,28 +217,38 @@ def _text_view(data):
         lines.append(f'☑️ Ещё {data["known"]} уже есть в твоём словаре')
     if data['over']:
         lines.append(f'Показал первые {len(items)}, ещё {data["over"]} не поместились')
-    listing = _item_lines(items, direction)
-    if _visible_length(lines + listing) > 3900:      # не влезает в сообщение — без транскрипции
-        listing = _item_lines(items, direction, with_ipa=False)
+    editing = data.get('edit_mode')
+    if editing:
+        lines[1] = '✏️ <b>Режим правки</b>: нажми на слово, чтобы исправить карточку.'
+    # Не влезает в сообщение — сначала без транскрипции, потом короче
+    for with_ipa, width in ((True, 35), (False, 35), (False, 22)):
+        listing = _item_lines(items, direction, with_ipa, width)
+        if _visible_length(lines + listing) <= 3900:
+            break
     lines += [''] + listing
 
     def front(item):                             # на кнопке — то, что будет на лицевой стороне
         return item.translation if direction == 'ru' else item.shown
 
-    rows = [[(f'{"☑️" if i in selected else "☐"} {i + 1}. {short(front(item), 40)}', f'tx:{i}')]
-            for i, item in enumerate(items)]
+    if editing:
+        rows = [[(f'✏️ {i + 1}. {short(front(item), 40)}', f'te:{i}')] for i, item in enumerate(items)]
+    else:
+        rows = [[(f'{"☑️" if i in selected else "☐"} {i + 1}. {short(front(item), 40)}', f'tx:{i}')]
+                for i, item in enumerate(items)]
     rows.append([(f'✅ Добавить ({len(selected)})', 'tx:add')])
     all_selected = len(selected) == len(items)
-    rows.append([('☐ Снять все' if all_selected else '☑️ Выбрать все', 'tx:all'),
-                 ('✖️ Отмена', 'tx:cancel')])
+    rows.append([('☑️ Отмечать' if editing else '✏️ Править', 'tx:edit'),
+                 ('☐ Снять все' if all_selected else '☑️ Выбрать все', 'tx:all')])
+    rows.append([('✖️ Отмена', 'tx:cancel')])
     if data.get('source'):
         rows.append([('🤖 Разобрать точнее через ИИ', 'tx:ai')])
     return '\n'.join(lines), inline(*rows)
 
 
-async def show_extraction(message: Message, text):
-    """Экран «Нашёл в тексте» с галочками."""
-    user_id = message.from_user.id
+async def show_extraction(message: Message, text, user_id=None):
+    """Экран «Нашёл в тексте» с галочками. user_id — если message прислал не пользователь
+    (экран вызван кнопкой под сообщением бота)."""
+    user_id = user_id or message.from_user.id
     if not dictionary.available():
         await message.answer(f'{NO_DICTIONARY} Разбирать текст пока нечем.\n'
                              'Пришли пары: <code>word - перевод</code>')
@@ -272,6 +284,19 @@ async def text_toggle(callback: CallbackQuery):
     view, kb = _text_view(data)
     await show(callback, view, kb)
     await callback.answer()
+
+
+@router.callback_query(F.data == 'tx:edit')
+async def text_edit_mode(callback: CallbackQuery):
+    """«✏️ Править» ⇄ «☑️ Отмечать»: что делает нажатие на слово."""
+    data = _screen(callback, 'text')
+    if data is None:
+        await callback.answer(STALE, show_alert=True)
+        return
+    data['edit_mode'] = not data.get('edit_mode')
+    view, kb = _text_view(data)
+    await show(callback, view, kb)
+    await callback.answer('Нажми на слово, чтобы исправить' if data['edit_mode'] else None)
 
 
 @router.callback_query(F.data == 'tx:all')
@@ -374,37 +399,41 @@ AI_HOWTO = (
     '3. ИИ ответит блоком с карточками. Скопируй его кнопкой «Копировать» над блоком '
     '(так сохранятся переносы строк) и пришли сюда — сделаю карточки'
 )
+AI_HOWTO_FILE = (
+    '🤖 <b>Карточки через ИИ</b>\n\n'
+    '📎 Текст длинный — промпт не влезает в одно сообщение, поэтому отправляю файлом.\n\n'
+    '1. Прикрепи файл <b>prompt.txt</b> в ChatGPT, Claude или DeepSeek\n'
+    '2. Напиши: <code>Выполни инструкцию из файла</code>\n'
+    '3. Скопируй ответ кнопкой «Копировать» и пришли сюда. Если он длинный, Telegram '
+    'разрежет его на несколько сообщений — я склею. Можно прислать ответ и файлом .txt'
+)
 AI_RU_NOTE = '\n\n🇷🇺 Текст на русском — карточки будут <b>с русского на английский</b>.'
-MAX_PROMPTS = 10   # больше частей за раз не присылаем — длинную книгу лучше по главам
 AI_PROMPT_PASTED = ('🤖 Это сам промпт 🙂 Вставь его в ИИ — ChatGPT, Claude, DeepSeek, Алису, '
                     'а сюда пришли <b>ответ</b> ИИ.')
 
 
 async def send_ai_prompt(bot: Bot, user_id, text, direction=None):
-    """Присылает инструкцию и промпт с текстом пользователя отдельным сообщением.
+    """Присылает инструкцию и промпт с текстом пользователя.
 
-    Длинный текст — несколько промптов «Промпт 1 из N». direction: 'en' — английский
-    текст, 'ru' — русский (карточки с русского), None — определить по тексту.
+    Влезает в одно сообщение — сообщением (нажал — скопировалось), длиннее — файлом
+    prompt.txt, который прикрепляют в ИИ. direction: 'en' — английский текст,
+    'ru' — русский (карточки с русского), None — определить по тексту.
     """
     if direction is None:
         direction = 'ru' if is_russian(text) else 'en'
-    prompts = ai_prompt.build_prompts(text, direction)
-    total = len(prompts)
-    prompts = prompts[:MAX_PROMPTS]
+    text = text[:200_000]
     # Весь текст — чтобы потом расставить карточки в порядке текста
-    database.save_ai_text(user_id, text[:200_000], direction)
-
+    database.save_ai_text(user_id, text, direction)
     note = AI_RU_NOTE if direction == 'ru' else ''
-    if len(prompts) > 1:
-        note += (f'\n\n✂️ Текст длинный — разбил на {len(prompts)} '
-                 f'{plural(len(prompts), "промпт", "промпта", "промптов")}. Вставляй их по очереди '
-                 '(можно в один чат с ИИ), а каждый ответ присылай сюда.')
-    if total > MAX_PROMPTS:
-        note += f' Это начало текста, остальное пришли потом отдельно.'
-    await bot.send_message(user_id, AI_HOWTO + note)
-    for number, prompt in enumerate(prompts, start=1):
-        header = f'<b>Промпт {number} из {len(prompts)}</b>\n' if len(prompts) > 1 else ''
-        await bot.send_message(user_id, f'{header}<pre>{esc(prompt)}</pre>')
+
+    prompt = ai_prompt.build_prompt(text, direction)
+    if len(prompt) <= ai_prompt.MESSAGE_LIMIT:
+        await bot.send_message(user_id, AI_HOWTO + note)
+        await bot.send_message(user_id, f'<pre>{esc(prompt)}</pre>')
+        return
+    prompt = ai_prompt.build_prompt(text, direction, ai_prompt.MAX_CARDS_FILE)
+    await bot.send_message(user_id, AI_HOWTO_FILE + note)
+    await bot.send_document(user_id, BufferedInputFile(prompt.encode('utf-8'), filename='prompt.txt'))
 
 
 @router.callback_query(F.data == 'ai:start')
@@ -430,7 +459,7 @@ async def ai_text(message: Message, state: FSMContext, bot: Bot):
     await send_ai_prompt(bot, message.from_user.id, message.text or message.caption)
 
 
-@router.message(AddWords.ai, ~F.document, ~F.text.in_(MENU_BUTTONS))  # файлы — в handlers/add.py
+@router.message(AddWords.ai, ~F.document, ~F.audio, ~F.text.in_(MENU_BUTTONS))  # файлы и mp3 — дальше
 async def ai_not_text(message: Message):
     await message.answer('Пришли текст — из него я соберу промпт для ИИ 🙂')
 
@@ -448,7 +477,7 @@ async def show_ai_cards(message: Message, cards):
             continue
         items.append(dictionary.Found(word, card.translation, dictionary.transcription(word),
                                       card.sentence, card.sentence_ru))
-    limit = ai_prompt.MAX_CARDS
+    limit = ai_prompt.MAX_CARDS_FILE
     kind = ' с русского' if direction == 'ru' else ''
     data = {'kind': 'text', 'items': items[:limit], 'selected': set(), 'direction': direction,
             'known': len(cards) - len(items), 'over': max(0, len(items) - limit),
@@ -570,3 +599,171 @@ async def reverse_close(callback: CallbackQuery):
     _forget(callback)
     await drop_buttons(callback)
     await callback.answer()
+
+
+# ─── Правка карточки до добавления ─────────────────────────
+
+# поле → (атрибут Found, как спросить, ограничение длины)
+FIELDS = {
+    'word': ('shown', 'английское слово или выражение', 60),
+    'tr': ('translation', 'перевод', 100),
+    'ipa': ('ipa', 'транскрипцию, например /ˈlʊkɪŋ fɔː/', 60),
+    'ex': ('sentence', 'пример — предложение на английском', 300),
+    'exru': ('sentence_ru', 'перевод примера', 300),
+}
+
+
+def _editor_view(data):
+    index = data['editing']
+    item = data['items'][index]
+    english = f'🇬🇧 <b>{esc(item.shown)}</b>' + (f'  {esc(item.ipa)}' if item.ipa else '')
+    russian = f'🇷🇺 {esc(item.translation) if item.translation else "—"}'
+    sides = [russian, english] if data.get('direction') == 'ru' else [english, russian]
+    lines = [f'✏️ <b>Карточка {index + 1} из {len(data["items"])}</b>', ''] + sides
+    if item.sentence or item.sentence_ru:
+        lines += ['', f'💬 <i>{esc(item.sentence) or "—"}</i>', f'     {esc(item.sentence_ru) or "—"}']
+    if data.get('saved'):
+        lines = [data.pop('saved'), ''] + lines
+    kb = inline(
+        [('🇬🇧 Слово', 'tf:word'), ('🇷🇺 Перевод', 'tf:tr')],
+        [('🔤 Транскрипция', 'tf:ipa'), ('💬 Пример', 'tf:ex')],
+        [('💬 Перевод примера', 'tf:exru')],
+        [('🚫 Убрать из списка', 'tf:drop')],
+        [('◀️ К списку', 'tf:back')],
+    )
+    return '\n'.join(lines), kb
+
+
+@router.callback_query(F.data.regexp(r'^te:\d+$'))
+async def item_editor(callback: CallbackQuery):
+    data = _screen(callback, 'text')
+    index = int(callback.data.split(':')[1])
+    if data is None or index >= len(data['items']):
+        await callback.answer(STALE, show_alert=True)
+        return
+    data['editing'] = index
+    view, kb = _editor_view(data)
+    await show(callback, view, kb)
+    await callback.answer()
+
+
+def _editing(callback):
+    data = _screen(callback, 'text')
+    return data if data is not None and data.get('editing') is not None else None
+
+
+@router.callback_query(F.data == 'tf:back')
+async def item_back(callback: CallbackQuery):
+    data = _editing(callback)
+    if data is None:
+        await callback.answer(STALE, show_alert=True)
+        return
+    data['editing'] = None
+    view, kb = _text_view(data)
+    await show(callback, view, kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'tf:drop')
+async def item_drop(callback: CallbackQuery):
+    data = _editing(callback)
+    if data is None:
+        await callback.answer(STALE, show_alert=True)
+        return
+    index = data.pop('editing')
+    data['editing'] = None
+    removed = data['items'].pop(index)
+    data['selected'] = {i if i < index else i - 1 for i in data['selected'] if i != index}
+    if not data['items']:
+        _forget(callback)
+        await show(callback, 'Список пуст — ничего не добавил.')
+    else:
+        view, kb = _text_view(data)
+        await show(callback, view, kb)
+    await callback.answer(f'Убрал «{short(removed.shown, 40)}»')
+
+
+@router.callback_query(F.data.regexp(r'^tf:(word|tr|ipa|ex|exru)$'))
+async def item_field(callback: CallbackQuery, state: FSMContext):
+    data = _editing(callback)
+    if data is None:
+        await callback.answer(STALE, show_alert=True)
+        return
+    field = callback.data.split(':')[1]
+    attr, what, _ = FIELDS[field]
+    item = data['items'][data['editing']]
+    previous = await state.get_state()
+    if previous == Study.card.state:
+        await state.clear()
+        previous = None
+    await state.set_state(AddWords.field)
+    await state.update_data(fe_message=callback.message.message_id, fe_field=field, fe_prev=previous)
+    current = getattr(item, attr)
+    await callback.bot.send_message(
+        callback.from_user.id,
+        f'✏️ Напиши {what} для «<b>{esc(short(item.shown, 60))}</b>»\n'
+        f'Сейчас: {esc(current) if current else "—"}',
+        reply_markup=inline([('◀️ Не менять', 'tf:cancel')]))
+    await callback.answer()
+
+
+async def _leave_field_state(state):
+    data = await state.get_data()
+    if data.get('fe_prev') == AddWords.waiting.state:
+        await state.set_state(AddWords.waiting)
+    else:
+        await state.clear()
+    return data
+
+
+@router.callback_query(F.data == 'tf:cancel')
+async def item_field_cancel(callback: CallbackQuery, state: FSMContext):
+    if await state.get_state() == AddWords.field.state:
+        await _leave_field_state(state)
+    await drop_buttons(callback)
+    await callback.answer('Оставил как было')
+
+
+@router.message(AddWords.field, F.text, ~F.text.in_(MENU_BUTTONS), ~F.text.startswith('/'))
+async def item_field_save(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    fsm = await state.get_data()
+    field = fsm.get('fe_field')
+    data = _screens.get((user_id, fsm.get('fe_message')))
+    if data is None or data.get('kind') != 'text' or data.get('editing') is None or field not in FIELDS:
+        await _leave_field_state(state)
+        await message.answer(STALE)
+        return
+    attr, _, limit = FIELDS[field]
+    value = ' '.join(message.text.split())[:limit]
+    if field == 'word':
+        if not has_latin(value):
+            await message.answer('Напиши английское слово латиницей 🙂')
+            return
+        value = dictionary.normalize_case(value)
+    if field == 'ipa' and value[:1] not in '/[':
+        value = f'/{value.strip("/")}/'
+    await _leave_field_state(state)
+
+    index = data['editing']
+    item = data['items'][index]._replace(**{attr: value})
+    if field == 'word':                          # новое слово — новая транскрипция
+        item = item._replace(ipa=dictionary.transcription(value))
+    data['items'][index] = item
+    data['selected'].add(index)                  # исправил — значит, хочет учить
+    data['saved'] = '✅ Исправил и отметил галочкой'
+
+    # Старый экран закрываем, исправленную карточку присылаем вниз
+    try:
+        await message.bot.edit_message_reply_markup(chat_id=user_id, message_id=fsm['fe_message'], reply_markup=None)
+    except Exception:
+        pass
+    _screens.pop((user_id, fsm['fe_message']), None)
+    view, kb = _editor_view(data)
+    sent = await message.answer(view, reply_markup=kb)
+    _remember(user_id, sent.message_id, data)
+
+
+@router.message(AddWords.field, ~F.text.in_(MENU_BUTTONS))
+async def item_field_not_text(message: Message):
+    await message.answer('Напиши новое значение текстом 🙂', reply_markup=inline([('◀️ Не менять', 'tf:cancel')]))

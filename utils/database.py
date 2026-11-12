@@ -201,6 +201,24 @@ def delete_word(user_id: int, word_id: int):
         conn.execute('DELETE FROM words WHERE id = ? AND user_id = ?', (word_id, user_id))
 
 
+def delete_word_ids(user_id: int, word_ids) -> int:
+    """Удаляет выбранные слова, возвращает, сколько удалено"""
+    word_ids = list(word_ids)
+    if not word_ids:
+        return 0
+    with sqlite3.connect(DB) as conn:
+        marks = ','.join('?' * len(word_ids))
+        return conn.execute(f'DELETE FROM words WHERE user_id = ? AND id IN ({marks})',
+                            (user_id, *word_ids)).rowcount
+
+
+def delete_known(user_id: int) -> int:
+    """Удаляет выученные слова (последний ответ «Знаю»), возвращает, сколько удалено"""
+    with sqlite3.connect(DB) as conn:
+        return conn.execute("DELETE FROM words WHERE user_id = ? AND last_answer = 'know'",
+                            (user_id,)).rowcount
+
+
 def count_words(user_id: int) -> int:
     """Сколько слов в словаре пользователя"""
     with sqlite3.connect(DB) as conn:

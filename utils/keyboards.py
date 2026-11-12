@@ -42,7 +42,8 @@ def inline(*rows):
 # ─── Добавление слов ───────────────────────────────────────
 add_kb = inline([('✅ Готово', 'add:done')])
 # Под приглашением «Добавление слов»: можно сразу пойти через ИИ
-add_prompt_kb = inline([('🤖 Через ИИ (ChatGPT, Claude…)', 'ai:start')], [('✅ Готово', 'add:done')])
+add_prompt_kb = inline([('🤖 Через ИИ (ChatGPT, Claude…)', 'ai:start')], [('🎵 Текст песни', 'sg:start')],
+                       [('✅ Готово', 'add:done')])
 empty_kb = inline([('📚 Добавить слова', 'add:start')])
 # После добавления вне режима «Добавить слова»
 added_kb = inline([('🎴 Учить', 'study:menu'), ('📋 Мои слова', 'voc:page:0')])
@@ -90,7 +91,7 @@ def vocabulary_kb(page, pages):
             (f'{page + 1} / {pages}', 'noop'),
             ('▶️', f'voc:page:{page + 1}') if page < pages - 1 else ('·', 'noop'),
         ])
-    rows.append([('🎴 Учить', 'study:menu'), ('🗑 Очистить', 'voc:clear')])
+    rows.append([('🎴 Учить', 'study:menu'), ('🗑 Удалить', 'voc:del')])
     return inline(*rows)
 
 

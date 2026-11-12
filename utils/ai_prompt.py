@@ -19,7 +19,7 @@ _RULES = '''СТРОГИЕ ПРАВИЛА:
 - Каждая карточка — с новой строки. Ровно 4 поля, разделитель « | ». Внутри полей символ | не используй.
 - Никаких заголовков, нумерации, таблиц, жирного шрифта и пояснений до или после блока кода.
 - Карточки — строго в том порядке, в котором фразы встречаются в тексте, сверху вниз.
-- Не больше 40 карточек. Если находок больше — оставь самые полезные, но порядок текста сохрани.
+- Не больше {max_cards} карточек. Если находок больше — оставь самые полезные, но порядок текста сохрани.
 
 ТЕКСТ:
 <<<
@@ -84,9 +84,8 @@ out of the blue | как снег на голову | The news came out of the b
 
 ''' + _RULES
 
-# Сколько текста помещается, чтобы промпт влез в одно сообщение Telegram (4096 символов)
-MAX_TEXT = 4000 - len(PROMPT)
-MAX_TEXT_RU = 4000 - len(PROMPT_RU)
+# Промпт длиннее этого не влезает в одно сообщение Telegram (4096 символов) — отправляем файлом
+MESSAGE_LIMIT = 4000
 # По этим фразам узнаём, что пользователь прислал боту сам промпт, а не ответ ИИ
 _PROMPT_MARKERS = ('составитель карточек', 'ЧТО ВЫБИРАТЬ', 'СТРОГИЕ ПРАВИЛА')
 
@@ -98,7 +97,8 @@ _HEADER_WORDS = {'фраза', 'слово', 'выражение', 'phrase', 'wo
 _BOUNDARY = re.compile(r"^(?P<ru>.*[А-Яа-яЁё][^A-Za-z]*?)\s+(?P<en>[A-Za-z][A-Za-z0-9\s'’\-]*)$")
 
 
-MAX_CARDS = 40
+MAX_CARDS = 40          # карточек в ответе на промпт-сообщение
+MAX_CARDS_FILE = 60     # на промпт-файл: текст длинный, находок больше
 
 
 def _norm(text):
@@ -135,40 +135,29 @@ def order_by_text(cards, source, direction='en'):
     return [card for _, card in indexed]
 
 
-def split_text(text, limit):
-    """Делит длинный текст на куски не длиннее limit — по предложениям и строкам песни."""
-    units = [u for u in re.split(r'(?<=[.!?…])\s+|\n+', text.strip()) if u.strip()]
-    chunks, current = [], ''
-    for unit in units:
-        while len(unit) > limit:                       # очень длинное «предложение» — режем по словам
-            head = unit[:limit].rsplit(' ', 1)[0] or unit[:limit]
-            if current:
-                chunks.append(current)
-                current = ''
-            chunks.append(head)
-            unit = unit[len(head):].strip()
-        joined = f'{current}\n{unit}' if current else unit
-        if len(joined) > limit:
-            chunks.append(current)
-            current = unit
-        else:
-            current = joined
-    if current:
-        chunks.append(current)
-    return chunks or ['']
-
-
-def build_prompts(text, direction='en'):
-    """Промпты с текстом пользователя внутри. Длинный текст — несколько промптов по очереди.
+def build_prompt(text, direction='en', max_cards=MAX_CARDS):
+    """Промпт с текстом пользователя внутри — весь текст целиком.
     direction='ru' — русский текст, карточки «с русского на английский»."""
-    template, limit = (PROMPT_RU, MAX_TEXT_RU) if direction == 'ru' else (PROMPT, MAX_TEXT)
-    return [template.format(text=chunk) for chunk in split_text(text, limit)]
+    template = PROMPT_RU if direction == 'ru' else PROMPT
+    return template.format(text=text.strip(), max_cards=max_cards)
 
 
-def build_prompt(text, direction='en'):
-    """Первый промпт и признак, что текст не влез в один промпт."""
-    prompts = build_prompts(text, direction)
-    return prompts[0], len(prompts) > 1
+def glue(parts):
+    """Склеивает ответ ИИ, который Telegram разрезал на несколько сообщений.
+
+    Если на стыке карточка разорвалась (в последней строке куска или в первой строке
+    следующего меньше трёх «|»), куски склеиваются в одну строку, иначе — с новой строки.
+    """
+    text = parts[0].strip()
+    for part in parts[1:]:
+        part = part.strip()
+        if not part:
+            continue
+        last = text.splitlines()[-1] if text else ''
+        first = part.splitlines()[0]
+        joiner = '\n' if last.count('|') >= 3 and first.count('|') >= 3 else ' '
+        text = f'{text}{joiner}{part}' if text else part
+    return text
 
 
 def is_prompt(text):

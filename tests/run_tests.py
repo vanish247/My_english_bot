@@ -805,12 +805,12 @@ looking for | дубль | x | y
 Надеюсь, помогло!"""
 
     async def t_ai_parse():
-        prompt, cut = ai_prompt.build_prompt('I was waiting for you.')
-        assert 'I was waiting for you.' in prompt and not cut
+        prompt = ai_prompt.build_prompt('I was waiting for you.')
+        assert 'I was waiting for you.' in prompt and 'Не больше 40 карточек' in prompt
         assert 'фраза | перевод | предложение | перевод предложения' in prompt
         assert prompt.rstrip().endswith('Ответь только блоком кода с карточками.')
-        long_prompt, cut = ai_prompt.build_prompt('word ' * 3000)
-        assert cut and len(long_prompt) < 4096, 'длинный текст обрезается, промпт влезает в сообщение'
+        long_prompt = ai_prompt.build_prompt('word ' * 3000, max_cards=60)
+        assert long_prompt.count('word') == 3000 and 'Не больше 60 карточек' in long_prompt, 'текст целиком'
         assert ai_prompt.is_prompt(prompt) and not ai_prompt.is_prompt(MESSY_AI_ANSWER)
         cards = ai_prompt.parse_answer(MESSY_AI_ANSWER)
         assert [c.phrase for c in cards] == ['looking for', 'put up with', 'Keys'], cards
@@ -849,7 +849,7 @@ looking for | дубль | x | y
     await case('Ответ ИИ одним абзацем без переносов (реальный ответ ChatGPT) → все 14 карточек', t_ai_one_line)
 
     async def t_prompt_pasted_back():
-        prompt, _ = ai_prompt.build_prompt('I was waiting for you.')
+        prompt = ai_prompt.build_prompt('I was waiting for you.')
         texts, _ = await send(msg_update(prompt), 'prompt pasted back')
         assert 'Это сам промпт' in texts[-1].text, texts[-1].text
     await case('Если вставить боту сам промпт — бот подсказывает, что нужен ответ ИИ', t_prompt_pasted_back)
@@ -876,7 +876,7 @@ looking for | дубль | x | y
     await case('Вставил ответ ИИ → «Карточки от ИИ» → добавил, перевод примера на карточке', t_ai_cards)
 
     async def t_ai_order():
-        prompt, _ = ai_prompt.build_prompt('x')
+        prompt = ai_prompt.build_prompt('x')
         assert 'в том порядке, в котором фразы встречаются в тексте' in prompt
         assert 'артикли' in prompt and 'если они стоят отдельно' not in prompt and 'go to the park' in prompt
         source = ("I was walking in the park. Suddenly I came across an old friend. "
@@ -1059,7 +1059,7 @@ looking for | дубль | x | y
         mid = session.next_id
         texts, _ = await send(cb_update('ru:yes', mid), 'ru yes text')
         assert 'английская фраза | русская фраза' in texts[-1].text and 'искала ключи' in texts[-1].text
-        assert ai_prompt.is_prompt(ai_prompt.build_prompts(source, 'ru')[0])
+        assert ai_prompt.is_prompt(ai_prompt.build_prompt(source, 'ru'))
         answer = ('out of the blue | как снег на голову | The news came out of the blue. | Новость свалилась как снег на голову.\n'
                   'was looking for | искала | I was looking for my keys all day. | Я весь день искала ключи.')
         texts, _ = await send(msg_update(answer), 'ru AI answer')
@@ -1074,22 +1074,54 @@ looking for | дубль | x | y
         assert got[0] == ('was looking for', 'искала', 'ru', 'Я весь день искала ключи.'), got
     await case('Русский текст → промпт «с русского» → ответ ИИ → карточки с русского в порядке текста', t_ru_text_ai)
 
-    # ───────── Длинный текст — несколько промптов ─────────
-    async def t_long_prompts():
+    # ───────── Длинный промпт — файлом, длинный ответ ИИ — склеиваем ─────────
+    def calls_of(kind, before):
+        return [c for c in session.calls[before:] if type(c).__name__ == kind]
+
+    async def t_prompt_file():
         sentence = 'She was looking forward to the weekend because she wanted to get away from it all. '
         await send(msg_update('/add'), 'add')
         await send(cb_update('ai:start', session.next_id), 'ai start')
+        before = len(session.calls)
         texts, _ = await send(msg_update(sentence * 60), 'long text')
-        prompts = [t for t in texts if '<pre>' in t.text]
-        assert len(prompts) >= 3, len(prompts)
-        assert f'Промпт 1 из {len(prompts)}' in prompts[0].text and 'разбил на' in texts[0].text
-        assert all(len(t.text) <= 4096 for t in texts)
-        joined = ' '.join(re.sub(r'<[^>]+>', '', t.text) for t in prompts)
-        assert joined.count('looking forward to') == 60, 'ни одно предложение не потерялось'
+        docs = calls_of('SendDocument', before)
+        assert len(docs) == 1 and docs[0].document.filename == 'prompt.txt', docs
+        content = docs[0].document.data.decode('utf-8')
+        assert content.count('looking forward to') == 60, 'текст целиком, ничего не потерялось'
+        assert 'Не больше 60 карточек' in content and ai_prompt.is_prompt(content)
+        assert 'файлом' in texts[-1].text and not any('<pre>' in t.text for t in texts)
+        await send(cb_update('ai:start', session.next_id), 'ai start 2')
+        before = len(session.calls)
+        texts, _ = await send(msg_update('I was waiting for you all day.'), 'short text')
+        assert '<pre>' in texts[-1].text and not calls_of('SendDocument', before), 'короткий — сообщением'
         await send(cb_update('add:done', session.next_id), 'done')
-        chunks = ai_prompt.split_text('word ' * 5000, 1000)
-        assert all(len(c) <= 1000 for c in chunks) and sum(c.count('word') for c in chunks) == 5000
-    await case('Длинный текст → «Промпт 1 из N», каждый влезает в сообщение, ничего не теряется', t_long_prompts)
+        session.files['back'] = docs[0].document.data
+    await case('Длинный промпт → один файл prompt.txt с текстом целиком, короткий — сообщением', t_prompt_file)
+
+    async def t_glue():
+        import handlers.add as add_handlers
+        assert ai_prompt.glue(['a | b | c | d', 'e | f | g | h']) == 'a | b | c | d\ne | f | g | h'
+        assert ai_prompt.glue(['a | b | I was look', 'ing | d']) == 'a | b | I was look ing | d'
+        cards = [f'phrase number{i} | перевод номер {i} | This is a rather long example sentence number {i} '
+                 f'with phrase number{i} inside it. | Это довольно длинный пример номер {i} с фразой.' for i in range(50)]
+        answer = '\n'.join(cards)
+        cut = answer.index(' ', len(answer) // 2)             # режем посреди карточки, как Telegram
+        part1, part2 = answer[:cut], answer[cut + 1:]
+        assert len(part1) >= add_handlers.GLUE_FROM
+        database.delete_words(UID)
+        database.save_ai_text(UID, 'x')
+        saved, add_handlers.GLUE_DELAY = add_handlers.GLUE_DELAY, 0.3
+        try:
+            before = len(session.calls)
+            await asyncio.gather(dp.feed_raw_update(bot, msg_update(part1)),
+                                 dp.feed_raw_update(bot, msg_update(part2)))
+        finally:
+            add_handlers.GLUE_DELAY = saved
+        sent = calls_of('SendMessage', before)
+        assert len(sent) == 1 and 'Карточки от ИИ: 50' in sent[0].text, [m.text[:60] for m in sent]
+        check_html(sent[0].text)
+        assert len(sent[0].text) <= 4096
+    await case('Длинный ответ ИИ, разрезанный Telegram на 2 сообщения, склеивается — все 50 карточек', t_glue)
 
     # ───────── Таблицы и файлы ─────────
     def doc_update(file_name, data):
@@ -1158,6 +1190,170 @@ looking for | дубль | x | y
         assert '<pre>' in texts[-1].text and 'looking for my keys' in texts[-1].text, 'файл в режиме «Через ИИ» → промпт'
         await send(cb_update('add:done', session.next_id), 'done')
     await case('Файлы: русский .txt → «с русского?», битый PDF и .jpg → понятный ответ, .srt, файл → ИИ', t_other_files)
+
+    async def t_prompt_file_back():
+        texts, _ = await send(doc_update('prompt.txt', session.files['back']), 'prompt file back')
+        assert 'Это сам промпт' in texts[-1].text, texts[-1].text
+    await case('Если прислать боту сам prompt.txt — подсказка, что нужен ответ ИИ', t_prompt_file_back)
+
+    # ───────── Правка карточки до добавления ─────────
+    async def t_edit_before_add():
+        if not dic.available():
+            return
+        database.delete_words(UID)
+        text = "I've been looking for my keys all morning and finally found them under the couch."
+        texts, _ = await send(msg_update(text), 'extract for edit')
+        mid = session.next_id
+        total = len(listed(texts[-1]))
+        texts, _ = await send(cb_update('tx:edit', mid), 'edit mode')
+        assert 'Режим правки' in texts[-1].text and kb_data(texts[-1])[0] == 'te:0', kb_data(texts[-1])
+        texts, _ = await send(cb_update('te:0', mid), 'open editor')
+        assert f'Карточка 1 из {total}' in texts[-1].text and 'looking for' in texts[-1].text
+        assert {'tf:word', 'tf:tr', 'tf:ipa', 'tf:ex', 'tf:exru', 'tf:drop', 'tf:back'} <= set(kb_data(texts[-1]))
+        await send(cb_update('tf:tr', mid), 'edit translation')
+        _, answers = await send(cb_update('tf:cancel', session.next_id), 'cancel field')
+        assert 'Оставил' in answers[-1].text
+        texts, _ = await send(cb_update('tf:tr', mid), 'edit translation again')
+        assert 'Напиши перевод' in texts[-1].text
+        texts, _ = await send(msg_update('искала'), 'new translation')
+        assert 'Исправил' in texts[-1].text and '🇷🇺 искала' in texts[-1].text, texts[-1].text
+        m2 = session.next_id
+        _, answers = await send(cb_update('tf:back', mid), 'old editor')
+        assert answers[-1].show_alert, 'старый экран закрыт'
+        await send(cb_update('tf:word', m2), 'edit word')
+        texts, _ = await send(msg_update('привет'), 'cyrillic word')
+        assert 'латиницей' in texts[-1].text
+        texts, _ = await send(msg_update('Search For'), 'new word')
+        m3 = session.next_id
+        assert '<b>search for</b>' in texts[-1].text and dic.transcription('search for') in texts[-1].text, texts[-1].text
+        await send(cb_update('tf:ipa', m3), 'edit ipa')
+        texts, _ = await send(msg_update('sɜːtʃ fə'), 'new ipa')
+        m4 = session.next_id
+        assert '/sɜːtʃ fə/' in texts[-1].text
+        texts, _ = await send(cb_update('tf:back', m4), 'back to list')
+        items = listed(texts[-1])
+        assert items[0][:2] == ('search for', 'искала') and '✅ Добавить (1)' in kb_text(texts[-1]), items
+        await send(cb_update('te:1', m4), 'open second')
+        texts, answers = await send(cb_update('tf:drop', m4), 'drop second')
+        assert len(listed(texts[-1])) == total - 1 and 'Убрал' in answers[-1].text
+        await send(cb_update('te:0', m4), 'open first again')
+        await send(cb_update('tf:ex', m4), 'edit example')
+        texts, _ = await send(msg_update('📋 Мои слова'), 'menu during field edit')
+        assert 'Словарь пока пуст' in texts[-1].text, 'кнопка меню не становится примером'
+        await send(cb_update('tf:back', m4), 'back')
+        texts, _ = await send(cb_update('tx:add', m4), 'add edited')
+        assert 'Добавил 1 слово' in texts[-1].text, texts[-1].text
+        w = database.get_words(UID)[0]
+        assert (w.word, w.translation, w.transcription) == ('search for', 'искала', '/sɜːtʃ fə/'), w
+        assert 'keys all morning' in w.example
+    await case('«✏️ Править» до добавления: перевод, слово (с новой транскрипцией), транскрипция, убрать', t_edit_before_add)
+
+    # ───────── Выборочное удаление ─────────
+    async def t_delete_selected():
+        database.delete_words(UID)
+        database.add_words(UID, [database.Word(f'word{i}', f'слово{i}', '', '') for i in range(25)])
+        ws = database.get_words(UID)
+        database.record_answer(UID, ws[0].id, True)
+        database.record_answer(UID, ws[1].id, True)
+        texts, _ = await send(msg_update('📋 Мои слова'), 'vocab')
+        mid = session.next_id
+        assert 'voc:del' in kb_data(texts[-1]) and 'voc:clear' not in kb_data(texts[-1])
+        texts, _ = await send(cb_update('voc:del', mid), 'delete screen')
+        assert 'Удаление слов' in texts[-1].text and 'стр. 1 / 2' in texts[-1].text and 'Отмечено: 0' in texts[-1].text
+        _, answers = await send(cb_update('vd:go', mid), 'nothing marked')
+        assert 'Сначала отметь' in answers[-1].text
+        await send(cb_update(f'vd:t:{ws[2].id}:0', mid), 'mark 3')
+        texts, _ = await send(cb_update(f'vd:t:{ws[3].id}:0', mid), 'mark 4')
+        assert any(t.startswith('☑️ 4.') for t in kb_text(texts[-1]))
+        await send(cb_update('vd:p:1', mid), 'page 2')
+        texts, _ = await send(cb_update('vd:all:1', mid), 'whole page 2')
+        assert 'Отмечено: 7' in texts[-1].text, texts[-1].text
+        assert '🗑 Выученные (2)' in kb_text(texts[-1]) and 'voc:clear' in kb_data(texts[-1])
+        texts, _ = await send(cb_update('vd:go', mid), 'confirm')
+        assert 'Удалить 7 слов' in texts[-1].text and 'нельзя отменить' in texts[-1].text
+        texts, _ = await send(cb_update('vd:yes', mid), 'delete marked')
+        assert 'Удалил: 7 слов' in texts[-1].text and database.count_words(UID) == 18
+        left = {w.word for w in database.get_words(UID)}
+        assert 'word2' not in left and 'word24' not in left and 'word0' in left
+        await send(cb_update('voc:del', mid), 'delete screen again')
+        texts, _ = await send(cb_update('vd:known', mid), 'known confirm')
+        assert 'выученные' in texts[-1].text and '2 слова' in texts[-1].text, texts[-1].text
+        await send(cb_update('vd:known:yes', mid), 'delete known')
+        assert database.count_words(UID) == 16 and 'word0' not in {w.word for w in database.get_words(UID)}
+    await case('Удаление: отметить слова и целую страницу, удалить отмеченные / выученные, с подтверждением', t_delete_selected)
+
+    # ───────── Текст песни ─────────
+    async def t_song():
+        from utils import lyrics as lyr
+        assert lyr.from_filename('03. David Bowie - The Man Who Sold the World.mp3') == \
+            'David Bowie The Man Who Sold the World'
+        words = ("We passed upon the stair\nWe spoke of was and when\nAlthough I wasn't there\n"
+                 "He said I was his friend\nWhich came as a surprise")
+        records = [
+            {'artistName': 'David Bowie', 'trackName': 'The Man Who Sold the World', 'plainLyrics': words, 'duration': 240},
+            {'artistName': 'Nirvana', 'trackName': 'The Man Who Sold the World', 'plainLyrics': words, 'duration': 260},
+            {'artistName': 'David Bowie', 'trackName': 'The Man Who Sold the World', 'plainLyrics': 'дубль', 'duration': 241},
+            {'artistName': 'X', 'trackName': 'Instrumental', 'plainLyrics': None, 'instrumental': True},
+        ]
+        asked, mode = [], {'v': 'ok'}
+
+        async def fake_fetch(params):
+            asked.append(params)
+            if mode['v'] == 'down':
+                raise RuntimeError('нет сети')
+            return records if mode['v'] == 'ok' else []
+
+        saved_fetch, lyr._fetch = lyr._fetch, fake_fetch
+
+        def audio_update(**audio):
+            uid_counter[0] += 1
+            return {'update_id': uid_counter[0], 'message': {
+                'message_id': uid_counter[0], 'date': int(time.time()), 'chat': {'id': UID, 'type': 'private'},
+                'from': user(), 'audio': {'file_id': 'a', 'file_unique_id': 'a', **audio}}}
+        try:
+            texts, _ = await send(audio_update(duration=259, performer='Nirvana', title='The Man Who Sold the World',
+                                               file_name='track.mp3'), 'mp3 with tags')
+            assert asked[0] == {'track_name': 'The Man Who Sold the World', 'artist_name': 'Nirvana'}, asked
+            mid = session.next_id
+            assert 'Nirvana — The Man Who Sold the World' in texts[-1].text, 'ближе по длительности — первой'
+            assert 'Нашёл текст: 5 строк' in texts[-1].text and 'We passed upon the stair' in texts[-1].text
+            assert {'sg:words', 'sg:ai', 'sg:other'} <= set(kb_data(texts[-1]))
+            texts, _ = await send(cb_update('sg:other', mid), 'other song')
+            assert kb_data(texts[-1]) == ['sg:pick:1', 'sg:back'], 'дубль и инструментал отброшены'
+            texts, _ = await send(cb_update('sg:pick:1', mid), 'pick bowie')
+            assert 'David Bowie — The Man Who Sold the World' in texts[-1].text
+            texts, _ = await send(cb_update('sg:words', mid), 'song words')
+            assert any(k in texts[-1].text for k in ('Нашёл в тексте', 'Не нашёл', 'не подключён')), texts[-1].text
+            texts, _ = await send(cb_update('sg:ai', mid), 'song ai')
+            assert '<pre>' in texts[-1].text and 'We passed upon the stair' in texts[-1].text
+            await send(msg_update('/add'), 'add mode')
+            texts, _ = await send(cb_update('sg:start', session.next_id), 'song button')
+            assert 'Текст песни' in texts[-1].text
+            texts, _ = await send(msg_update('bowie man who sold'), 'song name')
+            assert asked[-1] == {'q': 'bowie man who sold'} and 'Нашёл текст' in texts[-1].text
+            texts, _ = await send(msg_update('dog - собака'), 'back in add mode')
+            assert 'add:done' in kb_data(texts[-1]), 'после песни — снова режим добавления'
+            await send(cb_update('add:done', session.next_id), 'done')
+            texts, _ = await send(doc_update('David Bowie - The Man Who Sold the World.mp3', b'ID3'), 'mp3 as file')
+            assert asked[-1] == {'q': 'David Bowie The Man Who Sold the World'} and 'Нашёл текст' in texts[-1].text
+            mode['v'] = 'empty'
+            await send(msg_update('/song'), 'song command')
+            texts, _ = await send(msg_update('qwerty song zz'), 'unknown song')
+            assert 'Не нашёл текст песни' in texts[-1].text and 'sg:start' in kb_data(texts[-1])
+            mode['v'] = 'down'
+            await send(msg_update('/song'), 'song command 2')
+            texts, _ = await send(msg_update('anything'), 'service down')
+            assert 'не отвечает' in texts[-1].text
+            texts, _ = await send(audio_update(duration=100), 'mp3 without name')
+            assert 'нет названия' in texts[-1].text
+            uid_counter[0] += 1
+            texts, _ = await send({'update_id': uid_counter[0], 'message': {
+                'message_id': uid_counter[0], 'date': int(time.time()), 'chat': {'id': UID, 'type': 'private'},
+                'from': user(), 'voice': {'file_id': 'v', 'file_unique_id': 'v', 'duration': 3}}}, 'voice')
+            assert 'не распознаю' in texts[-1].text
+        finally:
+            lyr._fetch = saved_fetch
+    await case('🎵 Песня: mp3 (теги или имя файла) или название → текст из LRCLIB → слова / ИИ; не нашёл, сервис лёг', t_song)
 
     sch.scheduler.shutdown(wait=False)
     print(f'\nИТОГ: {passed[0]} прошло, {len(failures)} упало')

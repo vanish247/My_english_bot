@@ -10,6 +10,7 @@
 
 Работает и в режиме «📚 Добавить слова», и просто из главного меню.
 """
+import asyncio
 import logging
 import unicodedata
 
@@ -19,8 +20,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from handlers.dictionary import AI_PROMPT_PASTED, offer_russian, send_ai_prompt, show_ai_cards, show_for_text
+from handlers.song import find_and_show
 from handlers.study import study_menu
-from utils import ai_prompt, database, dictionary, files
+from utils import ai_prompt, database, dictionary, files, lyrics
 from utils.database import Word
 from utils.keyboards import BTN_ADD, add_kb, add_prompt_kb, added_kb, empty_kb, main_menu
 from utils.states import AddWords
@@ -39,12 +41,19 @@ PROMPT = (
     '✍️ <b>пары</b> — <code>apple - яблоко, fly - летать</code>\n'
     '🇷🇺 <b>по-русски</b> — сделаю карточки с русского на английский\n'
     '📄 <b>файл</b> — .txt, .docx, .pdf; таблицу «слово | транскрипция | перевод» добавлю сразу\n'
+    '🎵 <b>песню</b> — mp3 или название, найду её текст\n'
     '🤖 или <b>через ИИ</b> — соберу промпт для ChatGPT, Claude, DeepSeek, Алисы, '
     'а из ответа сделаю карточки\n\n'
     'Можно несколькими сообщениями подряд. Когда закончишь — жми «Готово».'
 )
 NOT_UNDERSTOOD = 'Не понял 🤔 Пришли английское слово, текст или выбери действие в меню 👇'
 MAX_SHOWN = 10     # больше не перечисляем, чтобы ответ не превысил лимит Telegram
+
+# Длинный ответ ИИ Telegram режет на куски по 4096 символов, и они приходят подряд.
+# Длинное сообщение с «|» ждём GLUE_DELAY секунд: всё, что придёт следом, — его продолжение.
+GLUE_FROM = 3000
+GLUE_DELAY = 2.0
+_pending = {}      # user_id → куски ответа ИИ, которые ещё собираем
 
 
 def _bullets(items):
@@ -73,6 +82,14 @@ async def smart_input(message: Message, state: FSMContext):
     """Определяет, что прислали: ответ ИИ, пары, слово или текст."""
     text = (message.text or message.caption or '').strip()
     adding = await state.get_state() == AddWords.waiting.state
+    user_id = message.from_user.id
+    if user_id in _pending:                       # продолжение длинного ответа ИИ
+        _pending[user_id].append(text)
+        return
+    if len(text) >= GLUE_FROM and '|' in text:
+        _pending[user_id] = [text]
+        await asyncio.sleep(GLUE_DELAY)
+        text = ai_prompt.glue(_pending.pop(user_id))
     await handle_text(message, text, adding)
 
 
@@ -106,7 +123,7 @@ async def handle_text(message: Message, text, adding, from_file=False):
         if from_file and len(text) > dictionary.MAX_TEXT:
             await message.answer(
                 f'📄 Текст длинный ({len(text)} символов). Словарём разберу начало, а целиком — '
-                'кнопкой «🤖 Разобрать точнее через ИИ»: разобью текст на несколько промптов.')
+                'кнопкой «🤖 Разобрать точнее через ИИ»: пришлю промпт файлом.')
         await show_for_text(message, text)
 
 
@@ -167,11 +184,21 @@ async def _add_pairs(message: Message, pairs, bad, adding, missing_note=None):
     await message.answer('\n'.join(lines), reply_markup=add_kb if adding else added_kb)
 
 
-@router.message(StateFilter(None, AddWords.waiting, AddWords.ai), F.document)
+@router.message(StateFilter(None, AddWords.waiting, AddWords.ai, AddWords.song), F.document)
 async def document_input(message: Message, state: FSMContext, bot: Bot):
-    """Прислали файл: .txt, .docx, .pdf, .srt."""
+    """Прислали файл: .txt, .docx, .pdf, .srt — или песню mp3 файлом."""
     document = message.document
     current = await state.get_state()
+    if lyrics.is_audio_name(document.file_name) or (document.mime_type or '').startswith('audio/'):
+        if current in (AddWords.ai.state, AddWords.song.state):
+            data = await state.get_data()
+            previous = data.get('song_prev') or data.get('ai_prev')
+            await (state.set_state(AddWords.waiting) if previous == AddWords.waiting.state else state.clear())
+        await find_and_show(message, query=lyrics.from_filename(document.file_name))
+        return
+    if current == AddWords.song.state:
+        await message.answer('🎵 Жду название песни или mp3. Текст песни можно вставить сообщением.')
+        return
     adding = current == AddWords.waiting.state
     if not files.kind(document.file_name):
         await message.answer('📄 Пока понимаю файлы .txt, .docx, .pdf и .srt.',
