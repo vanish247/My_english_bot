@@ -5,6 +5,7 @@
 Тесты работают во временной папке со своей пустой базой — твоя bot_database.db не трогается.
 """
 import asyncio
+import atexit
 import os
 import re
 import shutil
@@ -15,7 +16,10 @@ from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-os.chdir(tempfile.mkdtemp(prefix='english_bot_tests_'))
+WORKDIR = tempfile.mkdtemp(prefix='english_bot_tests_')
+os.chdir(WORKDIR)
+# Временную папку убираем за собой: на сервере /tmp лежит в памяти, а в папке — копия словаря
+atexit.register(shutil.rmtree, WORKDIR, ignore_errors=True)
 if os.path.exists(os.path.join(ROOT, 'dictionary.db')):          # словарь — если он есть в проекте
     shutil.copy(os.path.join(ROOT, 'dictionary.db'), 'dictionary.db')
 
