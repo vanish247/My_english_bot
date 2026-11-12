@@ -6,7 +6,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BotCommand
 
 from config import BOT_TOKEN
-from handlers import add, dictionary, fallback, inline, mailing, song, start, study, vocabulary
+from handlers import add, dictionary, editor, fallback, inline, mailing, song, start, study, vocabulary
 from utils import dictionary as dictionary_db
 from utils.database import init_db
 from utils.scheduler import restore_mailings, scheduler
@@ -24,6 +24,7 @@ dp.include_routers(
     start.router,
     study.router,
     vocabulary.router,
+    editor.router,          # «✏️ Изменить» уже добавленной карточки
     mailing.router,
     dictionary.router,      # кнопки экранов словаря и «свой перевод»
     song.router,            # mp3 или название песни → текст песни
@@ -35,11 +36,10 @@ dp.include_routers(
 # Команды в синей кнопке «Меню» рядом с полем ввода
 COMMANDS = [
     BotCommand(command='start', description='Главное меню'),
-    BotCommand(command='add', description='Добавить слова'),
-    BotCommand(command='study', description='Учить: карточки или по расписанию'),
-    BotCommand(command='vocabulary', description='Мой словарь'),
+    BotCommand(command='study', description='Учить: карточки или рассылка'),
+    BotCommand(command='words', description='Мои слова'),
+    BotCommand(command='ai', description='Карточки через ИИ'),
     BotCommand(command='song', description='Найти текст песни'),
-    BotCommand(command='mailing', description='Настроить рассылку слов'),
     BotCommand(command='help', description='Помощь'),
 ]
 

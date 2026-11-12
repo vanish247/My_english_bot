@@ -182,7 +182,8 @@ async def main():
         assert isinstance(texts[-1].reply_markup, ReplyKeyboardMarkup)
         assert texts[-1].reply_markup.is_persistent
         labels = [b.text for row in texts[-1].reply_markup.keyboard for b in row]
-        assert labels == ['📚 Добавить слова', '🎴 Учить', '📋 Мои слова', 'ℹ️ Помощь'], labels
+        assert labels == ['🎴 Учить', '📋 Мои слова', '🤖 Через ИИ', '🎵 Песня', '➕ Добавить', 'ℹ️ Помощь'], labels
+        assert 'файл' in texts[-1].reply_markup.input_field_placeholder, 'подсказка в поле ввода'
     await case('/start показывает постоянное меню', t_start)
 
     async def t_study_empty():
@@ -205,8 +206,10 @@ async def main():
     await case('Русское вне диалога → «Делаем карточки с русского?», «Нет» → подсказка', t_yes_idle)
 
     async def t_add():
-        texts, _ = await send(msg_update('📚 Добавить слова'), 'add start')
-        assert {'add:done', 'ai:start'} <= {b.callback_data for row in texts[-1].reply_markup.inline_keyboard for b in row}
+        texts, _ = await send(msg_update('➕ Добавить'), 'add hint')
+        assert 'Как добавить' in texts[-1].text and isinstance(texts[-1].reply_markup, ReplyKeyboardMarkup)
+        texts, _ = await send(msg_update('📚 Добавить слова'), 'old add button')
+        assert 'Как добавить' in texts[-1].text, 'кнопка старого меню тоже работает'
         texts, _ = await send(msg_update(
             'apple - яблоко, fly-летать, well-known - известный\nrun — бежать, просто текст, , <3 - love & joy'),
             'add words')
@@ -230,9 +233,9 @@ async def main():
     await case('Вторая порция слов без «Да» — принимается (раньше молчал)', t_add_second_without_yes)
 
     async def t_add_sticker():
-        texts, _ = await send(msg_update(dice=True), 'sticker in add')
-        assert 'Жду текст' in texts[-1].text
-    await case('Стикер/кубик в режиме добавления → подсказка', t_add_sticker)
+        texts, _ = await send(msg_update(dice=True), 'sticker')
+        assert 'Не понял' in texts[-1].text
+    await case('Стикер/кубик → подсказка и меню', t_add_sticker)
 
     async def t_add_huge():
         big = ', '.join(f'word{i} - слово{i}' for i in range(300))
@@ -242,16 +245,15 @@ async def main():
     await case('Вставка 300 пар за раз → ответ не превышает лимит', t_add_huge)
 
     async def t_menu_escape():
-        texts, _ = await send(msg_update('📋 Мои слова'), 'menu escape')
-        assert 'Твой словарь' in texts[-1].text
-        texts, _ = await send(msg_update('cow - корова'), 'after escape')
+        texts, _ = await send(msg_update('📋 Мои слова'), 'my words')
+        assert 'Мои слова</b> — 307' in texts[-1].text, texts[-1].text
+        texts, _ = await send(msg_update('cow - корова'), 'add after')
         data = [b.callback_data for row in texts[-1].reply_markup.inline_keyboard for b in row]
-        assert 'add:done' not in data, 'кнопка меню должна выводить из режима добавления'
-        assert 'Добавил 1 слово' in texts[-1].text
-    await case('Кнопка меню выводит из режима добавления', t_menu_escape)
+        assert data == ['study:menu', 'voc:page:0'] and 'Мои слова: 308' in texts[-1].text, data
+    await case('После добавления — кнопки «Учить» и «Мои слова», без режима и «Готово»', t_menu_escape)
 
     async def t_vocab_pages():
-        texts, _ = await send(msg_update('/vocabulary'), 'vocab')
+        texts, _ = await send(msg_update('/words'), 'vocab')
         mid = session.next_id
         kb = texts[-1].reply_markup.inline_keyboard
         assert kb[0][1].text == '1 / 16', kb[0][1].text
@@ -262,6 +264,9 @@ async def main():
         await send(cb_update('noop', mid), 'noop')
     await case('Словарь по страницам (308 слов → 16 страниц), лишняя страница не ломает', t_vocab_pages)
 
+    def kb_first(msg):
+        return msg.reply_markup.inline_keyboard[0][0].text
+
     async def t_study_flow():
         database.delete_words(UID)
         database.add_words(UID, [database.Word('apple', 'яблоко', '/ˈæp.əl/', 'An apple a day.'),
@@ -269,13 +274,15 @@ async def main():
                                  database.Word('dog', 'собака', '', '')])
         texts, _ = await send(msg_update('🎴 Учить'), 'study menu')
         mid = session.next_id
-        assert 'Как будем учить' in texts[-1].text and '3 слова' in texts[-1].text, texts[-1].text
-        data = [b.callback_data for row in texts[-1].reply_markup.inline_keyboard for b in row]
-        assert data == ['study:cards', 'study:shuffle', 'study:mailing', 'study:stats', 'voc:page:0'], data
+        assert '🎴 <b>Учить</b> — 3 слова' == texts[-1].text, texts[-1].text
+        kb = texts[-1].reply_markup.inline_keyboard
+        assert [(b.text, b.callback_data) for row in kb for b in row] == [
+            ('▶️ Начать', 'study:cards'), ('🔀 Вперемешку', 'study:shuffle'),
+            ('🔔 Рассылка: выкл', 'study:mailing')], kb
         texts, _ = await send(cb_update('study:cards', mid), 'cards')
         assert 'Карточка 1 из 3' in texts[-1].text and '🇷🇺' not in texts[-1].text
         front = [b.callback_data for row in texts[-1].reply_markup.inline_keyboard for b in row]
-        assert 'study:dontknow' in front, 'на лицевой стороне должна быть кнопка «Пропустить»'
+        assert front == ['study:reveal', 'study:stop'], 'на лице только «Показать» и «Закончить»'
         texts, _ = await send(cb_update('study:reveal', mid), 'reveal')
         assert '🇷🇺' in texts[-1].text
         await send(cb_update('study:know', mid), 'know')
@@ -285,8 +292,8 @@ async def main():
         texts, _ = await send(cb_update('study:know', mid), 'last')
         assert 'завершена' in texts[-1].text and 'Знаю: 2' in texts[-1].text, texts[-1].text
         texts, _ = await send(cb_update('study:menu', mid), 'back to choice')
-        assert 'Как будем учить' in texts[-1].text
-    await case('Учить → выбор → карточки: показать / пропустить / знаю → итог → назад к выбору', t_study_flow)
+        assert '<b>Учить</b>' in texts[-1].text and kb_first(texts[-1]) == '▶️ Незнакомые (1)', kb_first(texts[-1])
+    await case('Учить → «▶️ Начать» → карточки: показать / знаю → итог → «▶️ Незнакомые»', t_study_flow)
 
     async def t_study_stale():
         texts, _ = await send(msg_update('🎴 Учить'), 'study again')
@@ -311,7 +318,7 @@ async def main():
         texts, _ = await send(msg_update('🎴 Учить'), 'study menu for mailing')
         mid = session.next_id
         texts, _ = await send(cb_update('study:mailing', mid), 'open mailing')
-        assert 'Учить по расписанию' in texts[-1].text and 'выключена' in texts[-1].text
+        assert '🔔 <b>Рассылка</b>' in texts[-1].text and 'выключена' in texts[-1].text
         assert texts[-1].reply_markup.inline_keyboard[-1][0].callback_data == 'study:menu', 'нет кнопки Назад'
         texts, _ = await send(cb_update('mail:30', mid), 'mail on')
         assert 'каждые 30 минут' in texts[-1].text
@@ -322,7 +329,7 @@ async def main():
         check_html(sent.text)
         assert '<tg-spoiler>' in sent.text, sent.text
         texts, _ = await send(cb_update('study:menu', mid), 'back to choice')
-        assert 'Рассылка: ✅ каждые 30 минут' in texts[-1].text, texts[-1].text
+        assert '🔔 Рассылка: каждые 30 минут' in [b.text for row in texts[-1].reply_markup.inline_keyboard for b in row]
         texts, _ = await send(cb_update('study:mailing', mid), 'reopen mailing')
         texts, _ = await send(cb_update('mail:off', mid), 'mail off')
         assert sch.scheduler.get_job(f'mailing_{UID}') is None and database.get_mailing(UID) == 0
@@ -331,11 +338,13 @@ async def main():
 
     async def t_mailing_legacy():
         texts, _ = await send(msg_update('🔔 Рассылка'), 'old mailing button')
-        assert 'Учить по расписанию' in texts[-1].text
+        assert '🔔 <b>Рассылка</b>' in texts[-1].text
         texts, _ = await send(msg_update('/mailing'), 'mailing command')
-        assert 'Учить по расписанию' in texts[-1].text
+        assert '🔔 <b>Рассылка</b>' in texts[-1].text
         texts, _ = await send(cb_update('study:start', 77), 'old study:start button')
-        assert 'Как будем учить' in texts[-1].text
+        assert '<b>Учить</b>' in texts[-1].text
+        texts, _ = await send(msg_update('/vocabulary'), 'old vocabulary command')
+        assert 'Мои слова' in texts[-1].text
     await case('Кнопки и команды старой версии ведут в новые экраны', t_mailing_legacy)
 
     async def t_mailing_restore():
@@ -377,26 +386,21 @@ async def main():
     await case('Кнопка старой версии «📖 Учить» → бот присылает новое меню', t_old_buttons)
 
     async def t_help_and_commands():
-        for t in ('/help', 'ℹ️ Помощь', '/add', '/study', '/mailing', '/unknown'):
+        for t in ('/ai', '/song', '/help', 'ℹ️ Помощь', '/add', '/study', '/mailing', '/words', '/unknown', '/start'):
             await send(msg_update(t), t)
         await english_bot.bot.set_my_commands(english_bot.COMMANDS)
     await case('Все команды отвечают', t_help_and_commands)
 
     async def t_add_done():
-        await send(msg_update('/add'), 'add for done')
         await send(msg_update('a - б'), 'one word')
-        mid = session.next_id
-        texts, _ = await send(cb_update('add:done', mid), 'done')
-        assert 'Готово' in texts[-1].text and 'Как будем учить' in texts[-1].text, texts[-1].text
+        texts, _ = await send(cb_update('add:done', 99), 'old done button')
+        assert '<b>Учить</b>' in texts[-1].text, 'старая «Готово» ведёт в «Учить»'
         done_id = session.next_id
-        texts, _ = await send(cb_update('study:mailing', done_id), 'mailing from done')
-        texts, _ = await send(cb_update('mail:15', done_id), 'mail 15 from done')
+        texts, _ = await send(cb_update('study:mailing', done_id), 'mailing from study')
+        texts, _ = await send(cb_update('mail:15', done_id), 'mail 15')
         assert database.get_mailing(UID) == 15 and sch.scheduler.get_job(f'mailing_{UID}')
         sch.stop_mailing(UID)
-        texts, _ = await send(msg_update('x - y'), 'after done')
-        data = [b.callback_data for row in texts[-1].reply_markup.inline_keyboard for b in row]
-        assert 'add:done' not in data, '«Готово» должно завершать режим добавления'
-    await case('«Готово» → «Как будем учить?» → включить рассылку прямо оттуда', t_add_done)
+    await case('Старая кнопка «Готово» → «Учить» → включить рассылку оттуда', t_add_done)
 
     def cb_list(msg):
         return [b.callback_data for row in msg.reply_markup.inline_keyboard for b in row]
@@ -411,7 +415,7 @@ async def main():
         assert cb_list(sent) == ['mail:stop', 'mail:settings'], cb_list(sent)
         word_msg = session.next_id
         texts, _ = await send(cb_update('mail:settings', word_msg), 'mailing settings from word')
-        assert 'Учить по расписанию' in texts[-1].text and 'включена' in texts[-1].text
+        assert '🔔 <b>Рассылка</b>' in texts[-1].text and 'включена' in texts[-1].text
         _, answers = await send(cb_update('mail:stop', word_msg), 'stop from word')
         assert answers[-1].show_alert and 'остановлена' in answers[-1].text
         assert sch.scheduler.get_job(f'mailing_{UID}') is None and database.get_mailing(UID) == 0
@@ -452,34 +456,45 @@ async def main():
     await case('Карточки по порядку — как в тексте/песне; вперемешку — перемешаны; «Ещё раз» помнит режим', t_card_order)
 
     async def t_card_edit():
-        mid = await start_cards([('found', 'основывать')])
+        mid = await start_cards([('found', 'основывать'), ('cat', 'кот')])
         texts, _ = await send(cb_update('study:reveal', mid), 'reveal')
         assert 'study:edit' in cb_list(texts[-1]) and 'study:delete' in cb_list(texts[-1])
         texts, _ = await send(cb_update('study:edit', mid), 'edit')
-        assert 'Напиши правильный перевод' in texts[-1].text and 'основывать' in texts[-1].text
+        assert 'Изменить карточку' in texts[-1].text and 'основывать' in texts[-1].text
+        assert cb_list(texts[-1]) == ['we:word', 'we:tr', 'we:ipa', 'we:ex', 'we:exru', 'we:back'], cb_list(texts[-1])
+        texts, _ = await send(cb_update('we:tr', mid), 'edit translation')
+        assert 'Напиши перевод' in texts[-1].text and 'основывать' in texts[-1].text
         texts, _ = await send(msg_update('нашёл'), 'new translation')
-        assert 'Перевод исправлен' in texts[-1].text and 'нашёл' in texts[-1].text
-        assert [w.translation for w in database.get_words(UID)] == ['нашёл']
-        new_card = session.next_id
-        texts, _ = await send(cb_update('study:know', new_card), 'know after edit')
-        assert 'завершена' in texts[-1].text and 'Знаю: 1' in texts[-1].text
-    await case('Карточка: «Исправить» → новый перевод сохраняется, тренировка продолжается', t_card_edit)
+        assert 'Исправил' in texts[-1].text and '🇷🇺 нашёл' in texts[-1].text, texts[-1].text
+        m2 = session.next_id
+        await send(cb_update('we:ex', m2), 'edit example')
+        await send(msg_update('I found my keys.'), 'new example')
+        m3 = session.next_id
+        assert [(w.translation, w.example) for w in database.get_words(UID)][0] == ('нашёл', 'I found my keys.')
+        texts, _ = await send(cb_update('we:back', m3), 'back to card')
+        assert 'Карточка 1 из 2' in texts[-1].text and 'нашёл' in texts[-1].text and 'I found my keys.' in texts[-1].text
+        texts, _ = await send(cb_update('study:know', m3), 'know after edit')
+        assert 'Карточка 2 из 2' in texts[-1].text, 'тренировка продолжается'
+        await send(cb_update('study:stop', m3), 'stop')
+    await case('Карточка: «✏️ Изменить» → перевод и пример сохраняются → «К карточке», тренировка продолжается', t_card_edit)
 
     async def t_card_edit_cancel_and_menu():
         mid = await start_cards([('apple', 'яблоко'), ('cat', 'кот')])
         await send(cb_update('study:reveal', mid), 'reveal')
         await send(cb_update('study:edit', mid), 'edit')
-        prompt = session.next_id
-        _, answers = await send(cb_update('study:edit_cancel', prompt), 'cancel edit')
+        await send(cb_update('we:tr', mid), 'ask translation')
+        _, answers = await send(cb_update('we:cancel', session.next_id), 'cancel edit')
         assert 'Оставил' in answers[-1].text
+        texts, _ = await send(cb_update('we:back', mid), 'back to card')
         texts, _ = await send(cb_update('study:know', mid), 'continue after cancel')
         assert 'Карточка 2 из 2' in texts[-1].text
         await send(cb_update('study:reveal', mid), 'reveal 2')
         await send(cb_update('study:edit', mid), 'edit 2')
+        await send(cb_update('we:tr', mid), 'ask translation 2')
         texts, _ = await send(msg_update('📋 Мои слова'), 'menu during edit')
-        assert 'Твой словарь' in texts[-1].text, 'кнопка меню не должна стать переводом'
+        assert 'Мои слова' in texts[-1].text, 'кнопка меню не должна стать переводом'
         assert {w.translation for w in database.get_words(UID)} == {'яблоко', 'кот'}
-    await case('«Не менять» и кнопки меню во время исправления', t_card_edit_cancel_and_menu)
+    await case('«Не менять» и кнопки меню во время правки', t_card_edit_cancel_and_menu)
 
     async def t_card_delete():
         mid = await start_cards([('apple', 'яблоко'), ('cat', 'кот')])
@@ -590,7 +605,7 @@ async def main():
             texts, _ = await send(cb_update('lk:own', mid), 'own')
             assert 'Напиши перевод' in texts[-1].text
             texts, _ = await send(msg_update('📋 Мои слова'), 'menu during own')
-            assert 'Твой словарь' in texts[-1].text, 'кнопка меню не должна стать переводом'
+            assert 'Мои слова' in texts[-1].text, 'кнопка меню не должна стать переводом'
             await send(cb_update('lk:own', mid), 'own again')
             texts, _ = await send(msg_update('моё слово'), 'own translation')
             assert 'Добавил' in texts[-1].text
@@ -600,13 +615,11 @@ async def main():
         await case('Нет в словаре → «Свой перевод»; кнопки меню при этом работают', t_lookup_own)
 
         async def t_own_in_add_mode():
-            await send(msg_update('/add'), 'add mode')
-            await send(msg_update('zzqqxx'), 'unknown in add mode')
-            await send(cb_update('lk:own', session.next_id), 'own in add')
-            texts, _ = await send(msg_update('перевод'), 'own translation in add')
-            assert 'add:done' in kb_data(texts[-1]), 'после своего перевода остаёмся в режиме добавления'
-            await send(cb_update('add:done', session.next_id), 'done')
-        await case('«Свой перевод» в режиме добавления возвращает в режим добавления', t_own_in_add_mode)
+            await send(msg_update('zzqqxx'), 'unknown word')
+            await send(cb_update('lk:own', session.next_id), 'own')
+            texts, _ = await send(msg_update('перевод'), 'own translation')
+            assert kb_data(texts[-1]) == ['study:menu', 'voc:page:0'], 'после своего перевода — «Учить» и «Мои слова»'
+        await case('«Свой перевод» → добавил → кнопки «Учить» и «Мои слова»', t_own_in_add_mode)
 
         async def t_extract():
             database.delete_words(UID)
@@ -621,7 +634,10 @@ async def main():
             assert 'turned off' in items and 'went to bed' in items, items
             assert 'couch' not in items, 'слова из словаря не предлагаются'
             assert any(l.endswith('looking for') for l in kb_text(texts[-1])), kb_text(texts[-1])
-            assert 'уже есть в твоём словаре' in texts[-1].text
+            assert 'уже есть в «Моих словах»' in texts[-1].text
+            assert f'✅ Добавить ({len(items)})' in kb_text(texts[-1]), 'все отмечены сразу'
+            texts, _ = await send(cb_update('tx:all', mid), 'unselect all')
+            assert '✅ Добавить (0)' in kb_text(texts[-1])
             _, answers = await send(cb_update('tx:add', mid), 'add nothing')
             assert 'Сначала отметь' in answers[-1].text
             await send(cb_update('tx:0', mid), 'toggle 0')
@@ -640,6 +656,8 @@ async def main():
             texts, _ = await send(msg_update('Tomorrow I will figure out the weekend plan, she said.'), 'extract 2')
             mid = session.next_id
             n = sum(1 for d in kb_data(texts[-1]) if d.startswith('tx:') and d[3:].isdigit())
+            assert f'✅ Добавить ({n})' in kb_text(texts[-1]) and '☐ Снять все' in kb_text(texts[-1])
+            texts, _ = await send(cb_update('tx:all', mid), 'unselect all')
             texts, _ = await send(cb_update('tx:all', mid), 'select all')
             assert f'✅ Добавить ({n})' in kb_text(texts[-1])
             texts, _ = await send(cb_update('tx:cancel', mid), 'cancel')
@@ -863,7 +881,6 @@ looking for | дубль | x | y
         texts, _ = await send(msg_update(MESSY_AI_ANSWER), 'paste AI answer')
         assert 'Карточки от ИИ: 3' in texts[-1].text, texts[-1].text
         mid = session.next_id
-        await send(cb_update('tx:all', mid), 'select all')
         texts, _ = await send(cb_update('tx:add', mid), 'add AI cards')
         assert 'Добавил 3 слова' in texts[-1].text, texts[-1].text
         words = {w.word: w for w in database.get_words(UID)}
@@ -896,31 +913,31 @@ looking for | дубль | x | y
 
         # весь путь: «🤖 Через ИИ» → текст → ответ ИИ в другом порядке → экран в порядке текста
         database.delete_words(UID)
-        await send(msg_update('/add'), 'add mode')
-        await send(cb_update('ai:start', session.next_id), 'ai start')
+        await send(msg_update('🤖 Через ИИ'), 'ai menu')
         await send(msg_update(source), 'source text')
         answer = '\n'.join(f'{c.phrase} | {c.translation} | {c.sentence} | перевод' for c in shuffled)
         texts, _ = await send(msg_update(answer), 'shuffled AI answer')
         phrases = [a for a, _, _ in listed(texts[-1])]
         assert phrases == ['walking in the park', 'came across', 'catch up', 'kept on', 'made up'], phrases
         mid = session.next_id
+        await send(cb_update('tx:all', mid), 'unselect all')
         await send(cb_update('tx:3', mid), 'pick kept on')
         await send(cb_update('tx:0', mid), 'pick walking')
         await send(cb_update('tx:add', mid), 'add')
         assert [w.word for w in database.get_words(UID)] == ['walking in the park', 'kept on'], 'добавляются тоже по порядку'
-        await send(cb_update('add:done', session.next_id), 'done')
     await case('Карточки от ИИ стоят в порядке текста, даже если ИИ их перемешал', t_ai_order)
 
     async def t_ai_prompt_buttons():
-        texts, _ = await send(msg_update('/add'), 'add mode')
-        assert 'ai:start' in cb_list(texts[-1])
-        await send(cb_update('ai:start', session.next_id), 'ai start')
+        texts, _ = await send(msg_update('🤖 Через ИИ'), 'ai menu')
+        assert 'Карточки через ИИ' in texts[-1].text
         texts, _ = await send(msg_update('I was waiting for you all day.'), 'text for AI')
         assert '<pre>' in texts[-1].text and 'I was waiting for you all day.' in texts[-1].text
-        texts, _ = await send(msg_update('dog - собака'), 'back in add mode')
-        assert 'add:done' in cb_list(texts[-1]), 'после промпта возвращаемся в режим добавления'
-        await send(cb_update('add:done', session.next_id), 'done')
-    await case('«🤖 Через ИИ» в режиме добавления → промпт с текстом → снова режим добавления', t_ai_prompt_buttons)
+        texts, _ = await send(msg_update('dog - собака'), 'normal mode after prompt')
+        assert 'Добавил 1 слово' in texts[-1].text, 'после промпта бот снова понимает слова и пары'
+        texts, _ = await send(cb_update('ai:start', 5), 'old ai button')
+        assert 'Карточки через ИИ' in texts[-1].text
+        await send(msg_update('/start'), 'reset')
+    await case('«🤖 Через ИИ» в меню → промпт с текстом → дальше обычный режим', t_ai_prompt_buttons)
 
     async def t_no_dictionary():
         saved = dic.DICT_PATH
@@ -941,14 +958,14 @@ looking for | дубль | x | y
                                  [('apple', 'яблоко'), ('cat', 'кот'), ('dog', 'собака')]])
         await send(msg_update('🎴 Учить'), 'study')
         mid = session.next_id
-        assert 'study:unknown' not in cb_list(session.calls[-1]), 'пока ничего не учили — кнопки нет'
+        assert 'study:unknown' not in cb_list(session.calls[-1]), 'пока ничего не учили — «▶️ Начать»'
         await send(cb_update('study:cards', mid), 'cards')
         for answer in ('study:know', 'study:dontknow', 'study:know'):
             await send(cb_update('study:reveal', mid), 'reveal')
             await send(cb_update(answer, mid), answer)
         texts, _ = await send(cb_update('study:menu', mid), 'menu after')
-        assert 'Знаю: 2 · 🔁 Не знаю: 1 · 🆕 Новых: 0' in texts[-1].text, texts[-1].text
-        assert '❓ Только незнакомые (1)' in kb_text(texts[-1]), kb_text(texts[-1])
+        assert '✅ Знаю 2 · 🔁 Не знаю 1 · 🆕 Новых 0' in texts[-1].text, texts[-1].text
+        assert kb_first(texts[-1]) == '▶️ Незнакомые (1)', kb_text(texts[-1])
         texts, _ = await send(cb_update('study:unknown', mid), 'unknown only')
         assert 'Карточка 1 из 1' in texts[-1].text and 'cat' in texts[-1].text, texts[-1].text
         await send(cb_update('study:reveal', mid), 'reveal')
@@ -956,7 +973,7 @@ looking for | дубль | x | y
         assert cb_list(texts[-1])[0] == 'study:unknown', '«Ещё раз» — снова незнакомые'
         texts, _ = await send(cb_update('study:unknown', mid), 'again unknown')
         assert 'Незнакомых не осталось' in texts[-1].text, texts[-1].text
-    await case('«Знаю / Не знаю» запоминаются → «❓ Только незнакомые (N)» → «Незнакомых не осталось»', t_unknown_mode)
+    await case('«Знаю / Не знаю» запоминаются → «▶️ Незнакомые (N)» → «Незнакомых не осталось»', t_unknown_mode)
 
     async def t_stats():
         database.delete_words(UID)
@@ -1021,9 +1038,11 @@ looking for | дубль | x | y
         assert 'по-английски' in texts[-1].text
         texts, _ = await send(cb_update('study:reveal', m2), 'ru reveal')
         assert '🇬🇧 <b>dog</b>  /dɒɡ/' in texts[-1].text, texts[-1].text
-        await send(cb_update('study:edit', m2), 'ru edit')
+        texts, _ = await send(cb_update('study:edit', m2), 'ru edit')
+        assert texts[-1].text.index('🇷🇺') < texts[-1].text.index('🇬🇧'), 'в редакторе тоже русское первым'
+        await send(cb_update('we:word', m2), 'ru edit word')
         texts, _ = await send(msg_update('собачка'), 'ru edit cyrillic')
-        assert 'по-английски' in texts[-1].text
+        assert 'латиницей' in texts[-1].text
         texts, _ = await send(msg_update('hound'), 'ru edit latin')
         assert 'Исправил' in texts[-1].text and 'hound' in texts[-1].text
         w = database.get_words(UID)[0]
@@ -1072,7 +1091,6 @@ looking for | дубль | x | y
                                                            ('как снег на голову', 'out of the blue')], texts[-1].text
         assert kb_text(texts[-1])[0].endswith('искала'), 'на кнопке — русская сторона'
         m2 = session.next_id
-        await send(cb_update('tx:all', m2), 'all')
         await send(cb_update('tx:add', m2), 'add')
         got = [(w.word, w.translation, w.direction, w.example_ru) for w in database.get_words(UID)]
         assert got[0] == ('was looking for', 'искала', 'ru', 'Я весь день искала ключи.'), got
@@ -1084,8 +1102,7 @@ looking for | дубль | x | y
 
     async def t_prompt_file():
         sentence = 'She was looking forward to the weekend because she wanted to get away from it all. '
-        await send(msg_update('/add'), 'add')
-        await send(cb_update('ai:start', session.next_id), 'ai start')
+        await send(msg_update('🤖 Через ИИ'), 'ai menu')
         before = len(session.calls)
         texts, _ = await send(msg_update(sentence * 60), 'long text')
         docs = calls_of('SendDocument', before)
@@ -1094,11 +1111,10 @@ looking for | дубль | x | y
         assert content.count('looking forward to') == 60, 'текст целиком, ничего не потерялось'
         assert 'Не больше 60 карточек' in content and ai_prompt.is_prompt(content)
         assert 'файлом' in texts[-1].text and not any('<pre>' in t.text for t in texts)
-        await send(cb_update('ai:start', session.next_id), 'ai start 2')
+        await send(msg_update('🤖 Через ИИ'), 'ai menu 2')
         before = len(session.calls)
         texts, _ = await send(msg_update('I was waiting for you all day.'), 'short text')
         assert '<pre>' in texts[-1].text and not calls_of('SendDocument', before), 'короткий — сообщением'
-        await send(cb_update('add:done', session.next_id), 'done')
         session.files['back'] = docs[0].document.data
     await case('Длинный промпт → один файл prompt.txt с текстом целиком, короткий — сообщением', t_prompt_file)
 
@@ -1188,11 +1204,9 @@ looking for | дубль | x | y
         srt = b'1\n00:00:01,000 --> 00:00:03,000\nI gave up on my dreams.\n'
         texts, _ = await send(doc_update('film.srt', srt), 'srt')
         assert '00:00' not in texts[-1].text
-        await send(msg_update('/add'), 'add')
-        await send(cb_update('ai:start', session.next_id), 'ai start')
+        await send(msg_update('🤖 Через ИИ'), 'ai menu')
         texts, _ = await send(doc_update('story.txt', b'I was looking for my keys all morning.'), 'file for AI')
         assert '<pre>' in texts[-1].text and 'looking for my keys' in texts[-1].text, 'файл в режиме «Через ИИ» → промпт'
-        await send(cb_update('add:done', session.next_id), 'done')
     await case('Файлы: русский .txt → «с русского?», битый PDF и .jpg → понятный ответ, .srt, файл → ИИ', t_other_files)
 
     async def t_prompt_file_back():
@@ -1236,15 +1250,19 @@ looking for | дубль | x | y
         assert '/sɜːtʃ fə/' in texts[-1].text
         texts, _ = await send(cb_update('tf:back', m4), 'back to list')
         items = listed(texts[-1])
-        assert items[0][:2] == ('search for', 'искала') and '✅ Добавить (1)' in kb_text(texts[-1]), items
+        assert items[0][:2] == ('search for', 'искала') and f'✅ Добавить ({total})' in kb_text(texts[-1]), items
         await send(cb_update('te:1', m4), 'open second')
         texts, answers = await send(cb_update('tf:drop', m4), 'drop second')
         assert len(listed(texts[-1])) == total - 1 and 'Убрал' in answers[-1].text
         await send(cb_update('te:0', m4), 'open first again')
         await send(cb_update('tf:ex', m4), 'edit example')
         texts, _ = await send(msg_update('📋 Мои слова'), 'menu during field edit')
-        assert 'Словарь пока пуст' in texts[-1].text, 'кнопка меню не становится примером'
-        await send(cb_update('tf:back', m4), 'back')
+        assert 'Мои слова пока пусты' in texts[-1].text, 'кнопка меню не становится примером'
+        texts, _ = await send(cb_update('tf:back', m4), 'back')
+        assert f'✅ Добавить ({total - 1})' in kb_text(texts[-1]), 'убранное не добавится'
+        await send(cb_update('tx:edit', m4), 'edit mode off')
+        await send(cb_update('tx:all', m4), 'unselect all')
+        await send(cb_update('tx:0', m4), 'select edited')
         texts, _ = await send(cb_update('tx:add', m4), 'add edited')
         assert 'Добавил 1 слово' in texts[-1].text, texts[-1].text
         w = database.get_words(UID)[0]
@@ -1330,14 +1348,15 @@ looking for | дубль | x | y
             assert any(k in texts[-1].text for k in ('Нашёл в тексте', 'Не нашёл', 'не подключён')), texts[-1].text
             texts, _ = await send(cb_update('sg:ai', mid), 'song ai')
             assert '<pre>' in texts[-1].text and 'We passed upon the stair' in texts[-1].text
-            await send(msg_update('/add'), 'add mode')
-            texts, _ = await send(cb_update('sg:start', session.next_id), 'song button')
+            texts, _ = await send(msg_update('🎵 Песня'), 'song menu button')
             assert 'Текст песни' in texts[-1].text
             texts, _ = await send(msg_update('bowie man who sold'), 'song name')
             assert asked[-1] == {'q': 'bowie man who sold'} and 'Нашёл текст' in texts[-1].text
-            texts, _ = await send(msg_update('dog - собака'), 'back in add mode')
-            assert 'add:done' in kb_data(texts[-1]), 'после песни — снова режим добавления'
-            await send(cb_update('add:done', session.next_id), 'done')
+            texts, _ = await send(msg_update('dog - собака'), 'normal mode after song')
+            assert 'Добавил 1 слово' in texts[-1].text, 'после песни бот снова понимает слова и пары'
+            texts, _ = await send(cb_update('sg:start', 5), 'song inline button')
+            assert 'Текст песни' in texts[-1].text
+            await send(msg_update('/start'), 'reset')
             texts, _ = await send(doc_update('David Bowie - The Man Who Sold the World.mp3', b'ID3'), 'mp3 as file')
             assert asked[-1] == {'q': 'David Bowie The Man Who Sold the World'} and 'Нашёл текст' in texts[-1].text
             mode['v'] = 'empty'
@@ -1358,6 +1377,47 @@ looking for | дубль | x | y
         finally:
             lyr._fetch = saved_fetch
     await case('🎵 Песня: mp3 (теги или имя файла) или название → текст из LRCLIB → слова / ИИ; не нашёл, сервис лёг', t_song)
+
+    # ───────── «Мои слова»: значки, изменить, удалить; варианты «Учить» ─────────
+    async def t_words_screen():
+        await send(msg_update('/start'), 'reset')
+        database.delete_words(UID)
+        database.add_words(UID, [database.Word(w, t, '', '') for w, t in
+                                 [('apple', 'яблоко'), ('cat', 'кот'), ('dog', 'собака')]])
+        ws = database.get_words(UID)
+        database.record_answer(UID, ws[0].id, True)
+        database.record_answer(UID, ws[1].id, False)
+        texts, _ = await send(msg_update('📋 Мои слова'), 'my words')
+        mid = session.next_id
+        t = texts[-1].text
+        assert '✅ 1 знаю · 🔁 1 не знаю · 🆕 1 новых' in t, t
+        assert '1. ✅ <b>apple</b>' in t and '2. 🔁 <b>cat</b>' in t and '3. <b>dog</b>' in t, t
+        assert kb_data(texts[-1]) == ['ve:p:0', 'voc:del', 'study:stats'], kb_data(texts[-1])
+        texts, _ = await send(cb_update('ve:p:0', mid), 'choose word')
+        assert 'Какое слово изменить' in texts[-1].text and kb_data(texts[-1])[1] == f've:w:{ws[1].id}:0'
+        texts, _ = await send(cb_update(f've:w:{ws[1].id}:0', mid), 'open cat')
+        assert 'Изменить карточку' in texts[-1].text and 'we:del' in kb_data(texts[-1])
+        await send(cb_update('we:tr', mid), 'ask translation')
+        texts, _ = await send(msg_update('кошка'), 'new translation')
+        m2 = session.next_id
+        assert 'Исправил' in texts[-1].text and 'кошка' in texts[-1].text
+        _, answers = await send(cb_update('we:tr', mid), 'old editor')
+        assert answers[-1].show_alert, 'старый экран редактора устарел'
+        texts, _ = await send(cb_update('we:back', m2), 'back to list')
+        assert re.search(r'<b>cat</b>( /[^/]*/)? — кошка', texts[-1].text), texts[-1].text
+        await send(cb_update(f've:w:{ws[2].id}:0', m2), 'open dog')
+        texts, _ = await send(cb_update('we:del', m2), 'ask delete')
+        assert 'Удалить «<b>dog</b> — собака»' in texts[-1].text
+        texts, _ = await send(cb_update('we:del:no', m2), 'no')
+        assert 'Изменить карточку' in texts[-1].text
+        await send(cb_update('we:del', m2), 'ask delete again')
+        texts, answers = await send(cb_update('we:del:yes', m2), 'delete dog')
+        assert 'Удалил «dog»' in texts[-1].text and database.count_words(UID) == 2
+        # «Учить»: все знаю → «Повторить все»
+        database.record_answer(UID, ws[1].id, True)
+        texts, _ = await send(msg_update('🎴 Учить'), 'study all known')
+        assert kb_first(texts[-1]) == '▶️ Повторить все', kb_first(texts[-1])
+    await case('«Мои слова»: значки знаю/не знаю, «✏️ Изменить» и удаление слова; «Учить» → «Повторить все»', t_words_screen)
 
     sch.scheduler.shutdown(wait=False)
     print(f'\nИТОГ: {passed[0]} прошло, {len(failures)} упало')

@@ -50,7 +50,7 @@ async def send_next_word(bot: Bot, user_id: int):
     words = database.get_words(user_id)
     if not words:
         stop_mailing(user_id)
-        await _send(bot, user_id, '🔕 Словарь пуст — рассылку выключил.')
+        await _send(bot, user_id, '🔕 Слов не осталось — рассылку выключил.')
         return
 
     # % защищает от выхода за границы, если слов стало меньше

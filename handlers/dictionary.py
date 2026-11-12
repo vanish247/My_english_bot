@@ -15,12 +15,13 @@ import re
 from collections import OrderedDict
 
 from aiogram import Bot, F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from utils import ai_prompt, database, dictionary
 from utils.database import Word
-from utils.keyboards import MENU_BUTTONS, add_kb, added_kb, inline, ru_offer_kb
+from utils.keyboards import BTN_AI, MENU_BUTTONS, added_kb, inline, ru_offer_kb
 from utils.states import AddWords, Study
 from utils.ui import drop_buttons, show
 from utils.words import esc, has_latin, is_russian, plural, short, words_count
@@ -61,9 +62,9 @@ def _lookup_view(data):
     if data['added']:
         chosen = ', '.join(esc(t) for t in data['added'])
         text = (f'{head}\n\n✅ Добавил: <b>{esc(word)}</b> — {chosen}\n'
-                f'📚 В словаре: {words_count(data["total"])}\n\nМожно выбрать ещё значение:')
+                f'📋 Мои слова: {data["total"]}\n\nМожно выбрать ещё значение:')
     elif data['options']:
-        text = f'{head}\n\nВыбери значение — добавлю в словарь:'
+        text = f'{head}\n\nВыбери значение — добавлю в «Мои слова»:'
     elif not dictionary.available():
         text = f'{head}\n\n{NO_DICTIONARY} Напиши перевод сам:'
     else:
@@ -110,7 +111,7 @@ async def lookup_pick(callback: CallbackQuery):
     view, kb = _lookup_view(data)
     shown = await show(callback, view, kb)
     _remember(user_id, shown.message_id, data)
-    await callback.answer('Добавил ✅' if added else 'Уже было в словаре')
+    await callback.answer('Добавил ✅' if added else 'Уже есть в «Моих словах»')
 
 
 @router.callback_query(F.data == 'lk:ai')
@@ -132,12 +133,10 @@ async def lookup_close(callback: CallbackQuery):
 
 async def _ask_own(callback, state, word, ipa='', direction='en'):
     """Ждём свой вариант: перевод английского слова или английское для русского."""
-    previous = await state.get_state()
-    if previous == Study.card.state:
+    if await state.get_state() == Study.card.state:
         await state.clear()                  # свой перевод важнее начатой тренировки
-        previous = None
     await state.set_state(AddWords.custom)
-    await state.update_data(own_word=word, own_ipa=ipa, own_prev=previous, own_dir=direction)
+    await state.update_data(own_word=word, own_ipa=ipa, own_dir=direction)
     question = (f'✏️ Напиши, как по-английски «<b>{esc(word)}</b>»:' if direction == 'ru'
                 else f'✏️ Напиши перевод для «<b>{esc(word)}</b>»:')
     await callback.bot.send_message(callback.from_user.id, question)
@@ -164,24 +163,20 @@ async def own_translation(message: Message, state: FSMContext):
             await message.answer('Напиши английский вариант латиницей 🙂')
             return
         word, translation = translation, word        # английское — слово, русское — перевод
-    adding = data.get('own_prev') == AddWords.waiting.state
-    if adding:
-        await state.set_state(AddWords.waiting)
-    else:
-        await state.clear()
+    await state.clear()
     if not word:
         await message.answer(STALE)
         return
 
     added, _ = database.add_words(message.from_user.id, [
         Word(word, translation, '' if direction == 'ru' else data.get('own_ipa', ''), '', direction=direction)])
-    mark = '✅ Добавил' if added else '☑️ Уже есть в словаре'
+    mark = '✅ Добавил' if added else '☑️ Уже есть в «Моих словах»'
     pair = (f'🇷🇺 <b>{esc(translation)}</b> — {esc(word)}' if direction == 'ru'
             else f'<b>{esc(word)}</b> — {esc(translation)}')
     await message.answer(
         f'{mark}: {pair}\n'
-        f'📚 В словаре: {words_count(database.count_words(message.from_user.id))}',
-        reply_markup=add_kb if adding else added_kb)
+        f'📋 Мои слова: {database.count_words(message.from_user.id)}',
+        reply_markup=added_kb)
 
 
 @router.message(AddWords.custom, ~F.text.in_(MENU_BUTTONS))
@@ -212,9 +207,9 @@ def _text_view(data):
     items, selected = data['items'], data['selected']
     direction = data.get('direction', 'en')
     title = data.get('title') or f'📖 <b>Нашёл в тексте: {len(items)}</b>'
-    lines = [title, 'Отметь, что хочешь учить, и нажми «Добавить».']
+    lines = [title, 'Сними галочки с того, что не нужно, и нажми «Добавить».']
     if data['known']:
-        lines.append(f'☑️ Ещё {data["known"]} уже есть в твоём словаре')
+        lines.append(f'☑️ Ещё {data["known"]} уже есть в «Моих словах»')
     if data['over']:
         lines.append(f'Показал первые {len(items)}, ещё {data["over"]} не поместились')
     editing = data.get('edit_mode')
@@ -257,11 +252,12 @@ async def show_extraction(message: Message, text, user_id=None):
     items = dictionary.extract(text)
     known = {w.word.lower() for w in database.get_words(user_id) if w.direction == 'en'}
     fresh = [item for item in items if item.shown.lower() not in known]
-    data = {'kind': 'text', 'items': fresh[:dictionary.MAX_ITEMS], 'selected': set(), 'source': text,
+    shown = fresh[:dictionary.MAX_ITEMS]
+    data = {'kind': 'text', 'items': shown, 'selected': set(range(len(shown))), 'source': text,
             'known': len(items) - len(fresh), 'over': max(0, len(fresh) - dictionary.MAX_ITEMS)}
 
     if not data['items']:
-        note = f'\n☑️ {data["known"]} уже есть в твоём словаре.' if data['known'] else ''
+        note = f'\n☑️ {data["known"]} уже есть в «Моих словах».' if data['known'] else ''
         sent = await message.answer(
             '🤷 Не нашёл в тексте новых слов для изучения.' + note +
             '\nСамые простые слова (the, have, good…) я пропускаю.',
@@ -335,8 +331,8 @@ async def text_add(callback: CallbackQuery):
     else:
         lines += [f'• <b>{esc(short(w.word, 40))}</b> — {esc(short(w.translation, 40))}' for w in added]
     if duplicates:
-        lines.append(f'☑️ Уже были в словаре: {len(duplicates)}')
-    lines += ['', f'📚 В словаре: {words_count(database.count_words(user_id))}']
+        lines.append(f'☑️ Уже были в «Моих словах»: {len(duplicates)}')
+    lines += ['', f'📋 Мои слова: {database.count_words(user_id)}']
     _forget(callback)
     await show(callback, '\n'.join(lines), added_kb)
     await callback.answer('Добавил ✅')
@@ -436,26 +432,33 @@ async def send_ai_prompt(bot: Bot, user_id, text, direction=None):
     await bot.send_document(user_id, BufferedInputFile(prompt.encode('utf-8'), filename='prompt.txt'))
 
 
+AI_ASK = ('🤖 <b>Карточки через ИИ</b>\n\n'
+          'Пришли текст, пост, песню, слово или файл (.txt, .docx, .pdf) — соберу из него промпт '
+          'для ChatGPT, Claude, DeepSeek или Алисы, а из ответа сделаю карточки.\n'
+          'Можно и по-русски — тогда карточки будут с русского на английский.')
+
+
+@router.message(Command('ai'))
+@router.message(F.text == BTN_AI)
+async def ai_from_menu(message: Message, state: FSMContext):
+    """«🤖 Через ИИ» в меню: сначала просим текст."""
+    await state.clear()
+    await state.set_state(AddWords.ai)
+    await message.answer(AI_ASK)
+
+
 @router.callback_query(F.data == 'ai:start')
 async def ai_start(callback: CallbackQuery, state: FSMContext):
-    """«🤖 Через ИИ» в режиме добавления слов: сначала просим текст."""
-    previous = await state.get_state()
+    """Кнопка «🤖 Через ИИ» под сообщениями прошлых версий."""
+    await state.clear()
     await state.set_state(AddWords.ai)
-    await state.update_data(ai_prev=previous)
-    await callback.bot.send_message(
-        callback.from_user.id,
-        '🤖 Пришли текст, пост, песню, слово или файл (.txt, .docx, .pdf) — соберу из него промпт для ИИ.\n'
-        'Можно и по-русски — тогда карточки будут с русского на английский.')
+    await callback.bot.send_message(callback.from_user.id, AI_ASK)
     await callback.answer()
 
 
 @router.message(AddWords.ai, F.text | F.caption, ~F.document, ~F.text.in_(MENU_BUTTONS), ~F.text.startswith('/'))
 async def ai_text(message: Message, state: FSMContext, bot: Bot):
-    data = await state.get_data()
-    if data.get('ai_prev') == AddWords.waiting.state:
-        await state.set_state(AddWords.waiting)
-    else:
-        await state.clear()
+    await state.clear()
     await send_ai_prompt(bot, message.from_user.id, message.text or message.caption)
 
 
@@ -479,11 +482,11 @@ async def show_ai_cards(message: Message, cards):
                                       card.sentence, card.sentence_ru))
     limit = ai_prompt.MAX_CARDS_FILE
     kind = ' с русского' if direction == 'ru' else ''
-    data = {'kind': 'text', 'items': items[:limit], 'selected': set(), 'direction': direction,
+    data = {'kind': 'text', 'items': items[:limit], 'selected': set(range(len(items[:limit]))), 'direction': direction,
             'known': len(cards) - len(items), 'over': max(0, len(items) - limit),
             'title': f'🤖 <b>Карточки от ИИ{kind}: {min(len(items), limit)}</b>'}
     if not data['items']:
-        await message.answer('☑️ Все слова из ответа ИИ уже есть в твоём словаре.')
+        await message.answer('☑️ Все слова из ответа ИИ уже есть в «Моих словах».')
         return
     view, kb = _text_view(data)
     sent = await message.answer(view, reply_markup=kb)
@@ -572,7 +575,7 @@ async def reverse_pick(callback: CallbackQuery):
     view, kb = _reverse_view(data)
     shown = await show(callback, view, kb)
     _remember(user_id, shown.message_id, data)
-    await callback.answer('Добавил ✅' if added else 'Уже было в словаре')
+    await callback.answer('Добавил ✅' if added else 'Уже есть в «Моих словах»')
 
 
 @router.callback_query(F.data == 'rk:own')
@@ -692,12 +695,10 @@ async def item_field(callback: CallbackQuery, state: FSMContext):
     field = callback.data.split(':')[1]
     attr, what, _ = FIELDS[field]
     item = data['items'][data['editing']]
-    previous = await state.get_state()
-    if previous == Study.card.state:
+    if await state.get_state() == Study.card.state:
         await state.clear()
-        previous = None
     await state.set_state(AddWords.field)
-    await state.update_data(fe_message=callback.message.message_id, fe_field=field, fe_prev=previous)
+    await state.update_data(fe_message=callback.message.message_id, fe_field=field)
     current = getattr(item, attr)
     await callback.bot.send_message(
         callback.from_user.id,
@@ -709,10 +710,7 @@ async def item_field(callback: CallbackQuery, state: FSMContext):
 
 async def _leave_field_state(state):
     data = await state.get_data()
-    if data.get('fe_prev') == AddWords.waiting.state:
-        await state.set_state(AddWords.waiting)
-    else:
-        await state.clear()
+    await state.clear()
     return data
 
 

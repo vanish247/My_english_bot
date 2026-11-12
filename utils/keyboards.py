@@ -12,22 +12,28 @@ from aiogram.types import (
 
 # Тексты кнопок меню. Хэндлеры сравнивают с этими же константами —
 # поэтому текст кнопки достаточно поменять в одном месте.
-BTN_ADD = '📚 Добавить слова'
 BTN_STUDY = '🎴 Учить'
 BTN_WORDS = '📋 Мои слова'
+BTN_AI = '🤖 Через ИИ'
+BTN_SONG = '🎵 Песня'
+BTN_ADD = '➕ Добавить'
 BTN_HELP = 'ℹ️ Помощь'
-OLD_BTN_MAILING = '🔔 Рассылка'   # кнопка прошлой версии: у кого-то ещё висит старое меню
-MENU_BUTTONS = {BTN_ADD, BTN_STUDY, BTN_WORDS, BTN_HELP, OLD_BTN_MAILING}
+# Кнопки прошлых версий: у кого-то ещё висит старое меню
+OLD_BTN_ADD = '📚 Добавить слова'
+OLD_BTN_MAILING = '🔔 Рассылка'
+MENU_BUTTONS = {BTN_STUDY, BTN_WORDS, BTN_AI, BTN_SONG, BTN_ADD, BTN_HELP, OLD_BTN_ADD, OLD_BTN_MAILING}
 
+# Самое частое — наверху. Слово, текст, файл бот понимает и без кнопок — об этом
+# напоминает серая подсказка в поле ввода.
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text=BTN_ADD)],
         [KeyboardButton(text=BTN_STUDY), KeyboardButton(text=BTN_WORDS)],
-        [KeyboardButton(text=BTN_HELP)],
+        [KeyboardButton(text=BTN_AI), KeyboardButton(text=BTN_SONG)],
+        [KeyboardButton(text=BTN_ADD), KeyboardButton(text=BTN_HELP)],
     ],
     resize_keyboard=True,
     is_persistent=True,                        # меню не сворачивается
-    input_field_placeholder='Выбери действие 👇',
+    input_field_placeholder='Пришли слово, текст, файл или mp3…',
 )
 
 
@@ -40,12 +46,8 @@ def inline(*rows):
 
 
 # ─── Добавление слов ───────────────────────────────────────
-add_kb = inline([('✅ Готово', 'add:done')])
-# Под приглашением «Добавление слов»: можно сразу пойти через ИИ
-add_prompt_kb = inline([('🤖 Через ИИ (ChatGPT, Claude…)', 'ai:start')], [('🎵 Текст песни', 'sg:start')],
-                       [('✅ Готово', 'add:done')])
-empty_kb = inline([('📚 Добавить слова', 'add:start')])
-# После добавления вне режима «Добавить слова»
+empty_kb = inline([('➕ Как добавить слова', 'add:start')])
+# Под сообщением «Добавил…»
 added_kb = inline([('🎴 Учить', 'study:menu'), ('📋 Мои слова', 'voc:page:0')])
 
 # Русский текст: делаем карточки «с русского на английский»?
@@ -53,30 +55,26 @@ ru_offer_kb = inline([('✅ Да, с русского', 'ru:yes'), ('✖️ Не
 
 
 # ─── «Как будем учить?» ────────────────────────────────────
-def study_menu_kb(unknown=0, known=0):
-    """Показывается по кнопке «Учить» и после «Готово» при добавлении слов.
-    «Только незнакомые» — когда часть слов уже отмечена «Знаю»."""
-    rows = [
-        [('🎴 Карточки по порядку', 'study:cards')],
-        [('🔀 Карточки вперемешку', 'study:shuffle')],
-    ]
+def study_menu_kb(unknown=0, known=0, mailing=''):
+    """Экран «🎴 Учить». Первая кнопка — то, что нужно чаще всего:
+    незнакомые, если часть слов уже знаешь, иначе — начать по порядку."""
     if known and unknown:
-        rows.append([(f'❓ Только незнакомые ({unknown})', 'study:unknown')])
-    rows.append([('🔔 Присылать по расписанию', 'study:mailing')])
-    rows.append([('📊 Статистика', 'study:stats'), ('📋 Мои слова', 'voc:page:0')])
+        rows = [[(f'▶️ Незнакомые ({unknown})', 'study:unknown')],
+                [('📋 Все по порядку', 'study:cards'), ('🔀 Вперемешку', 'study:shuffle')]]
+    else:
+        rows = [[('▶️ Повторить все' if known else '▶️ Начать', 'study:cards')],
+                [('🔀 Вперемешку', 'study:shuffle')]]
+    rows.append([(f'🔔 Рассылка: {mailing or "выкл"}', 'study:mailing')])
     return inline(*rows)
 
 # ─── Карточки ──────────────────────────────────────────────
 card_front_kb = inline(
-    [('👀 Показать перевод', 'study:reveal')],
-    [('⏭ Пропустить', 'study:dontknow'), ('⏹ Закончить', 'study:stop')],
+    [('👀 Показать перевод', 'study:reveal'), ('⏹', 'study:stop')],
 )
 card_back_kb = inline(
     [('✅ Знаю', 'study:know'), ('🔁 Не знаю', 'study:dontknow')],
-    [('✏️ Исправить', 'study:edit'), ('🗑 Удалить', 'study:delete')],
-    [('⏹ Закончить', 'study:stop')],
+    [('✏️ Изменить', 'study:edit'), ('🗑', 'study:delete'), ('⏹', 'study:stop')],
 )
-edit_cancel_kb = inline([('◀️ Не менять', 'study:edit_cancel')])
 def study_done_kb(mode='cards'):
     """После тренировки: «Ещё раз» — в том же режиме (по порядку или вперемешку)."""
     return inline([('🔁 Ещё раз', f'study:{mode}'), ('◀️ К выбору', 'study:menu')])
@@ -91,7 +89,8 @@ def vocabulary_kb(page, pages):
             (f'{page + 1} / {pages}', 'noop'),
             ('▶️', f'voc:page:{page + 1}') if page < pages - 1 else ('·', 'noop'),
         ])
-    rows.append([('🎴 Учить', 'study:menu'), ('🗑 Удалить', 'voc:del')])
+    rows.append([('✏️ Изменить', f've:p:{page}'), ('🗑 Удалить', 'voc:del')])
+    rows.append([('📊 Статистика', 'study:stats')])
     return inline(*rows)
 
 

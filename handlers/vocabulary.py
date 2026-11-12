@@ -1,4 +1,5 @@
-"""Словарь: список слов по страницам и удаление.
+"""«📋 Мои слова»: список по страницам с отметками «знаю / не знаю», удаление.
+Изменить слово — handlers/editor.py, статистика — handlers/study.py.
 
 Удаление — экран с галочками по страницам: отметить отдельные слова, всю страницу,
 удалить выученные («Знаю») или всё. Каждое удаление — с подтверждением.
@@ -24,26 +25,32 @@ def _page(user_id, page):
     """Текст и кнопки нужной страницы словаря."""
     words = database.get_words(user_id)
     if not words:
-        return '📋 Словарь пока пуст.\nДобавь первые слова 👇', empty_kb
+        return '📋 Мои слова пока пусты.\nДобавь первые слова 👇', empty_kb
 
     pages = (len(words) + PAGE_SIZE - 1) // PAGE_SIZE
     page = max(0, min(page, pages - 1))          # защита от несуществующей страницы
     start = page * PAGE_SIZE
 
-    lines = [f'📋 <b>Твой словарь</b> — {words_count(len(words))}', '']
+    lines = [f'📋 <b>Мои слова</b> — {len(words)}']
+    known = sum(w.answer == 'know' for w in words)
+    unknown = sum(w.answer == 'dontknow' for w in words)
+    if known or unknown:
+        lines.append(f'✅ {known} знаю · 🔁 {unknown} не знаю · 🆕 {len(words) - known - unknown} новых')
+    lines.append('')
     for number, item in enumerate(words[start:start + PAGE_SIZE], start=start + 1):
+        mark = {'know': '✅ ', 'dontknow': '🔁 '}.get(item.answer, '')
         ipa = f' {esc(short(item.transcription, 40))}' if item.transcription else ''
         if item.direction == 'ru':          # карточка «с русского» — русское первым
-            lines.append(f'{number}. 🇷🇺 <b>{esc(short(item.translation, 40))}</b> — '
+            lines.append(f'{number}. {mark}🇷🇺 <b>{esc(short(item.translation, 40))}</b> — '
                          f'{esc(short(item.word, 40))}{ipa}')
         elif item.translation:
-            lines.append(f'{number}. <b>{esc(short(item.word, 40))}</b>{ipa} — {esc(short(item.translation, 40))}')
+            lines.append(f'{number}. {mark}<b>{esc(short(item.word, 40))}</b>{ipa} — {esc(short(item.translation, 40))}')
         else:
-            lines.append(f'{number}. {esc(short(item.word, 80))}{ipa}')
+            lines.append(f'{number}. {mark}{esc(short(item.word, 80))}{ipa}')
     return '\n'.join(lines), vocabulary_kb(page, pages)
 
 
-@router.message(Command('vocabulary'))
+@router.message(Command('words', 'vocabulary'))
 @router.message(F.text == BTN_WORDS)
 async def vocabulary_from_menu(message: Message, state: FSMContext):
     await state.clear()
@@ -67,7 +74,7 @@ _marks = {}        # user_id → номера (id) отмеченных для �
 def _delete_view(user_id, page):
     words = database.get_words(user_id)
     if not words:
-        return '📋 Словарь пуст.', empty_kb
+        return '📋 Мои слова пока пусты.', empty_kb
     ids = {w.id for w in words}
     marked = _marks.setdefault(user_id, set())
     marked &= ids                                 # слова могли удалить в другом месте
@@ -146,7 +153,7 @@ async def delete_confirm(callback: CallbackQuery):
     if not marked:
         await callback.answer('Сначала отметь слова, которые хочешь удалить')
         return
-    await show(callback, f'🗑 Удалить {words_count(len(marked))} из словаря?\n\nЭто действие нельзя отменить.',
+    await show(callback, f'🗑 Удалить {words_count(len(marked))}?\n\nЭто действие нельзя отменить.',
                inline([('🗑 Да, удалить', 'vd:yes')], [('◀️ Назад', 'vd:p:0')]))
     await callback.answer()
 
@@ -182,10 +189,10 @@ async def delete_do(callback: CallbackQuery):
 async def ask_clear(callback: CallbackQuery):
     total = database.count_words(callback.from_user.id)
     if total == 0:
-        await callback.answer('Словарь и так пуст')
+        await callback.answer('Слов и так нет')
         return
     await show(callback,
-               f'🗑 Удалить все {words_count(total)} из словаря?\n\nЭто действие нельзя отменить.',
+               f'🗑 Удалить все слова — {words_count(total)}?\n\nЭто действие нельзя отменить.',
                confirm_clear_kb)
     await callback.answer()
 
@@ -195,5 +202,5 @@ async def clear(callback: CallbackQuery):
     user_id = callback.from_user.id
     database.delete_words(user_id)
     stop_mailing(user_id)                 # слать больше нечего
-    await show(callback, '🗑 Словарь очищен. Рассылка тоже выключена.', empty_kb)
-    await callback.answer('Словарь очищен')
+    await show(callback, '🗑 Все слова удалены. Рассылка тоже выключена.', empty_kb)
+    await callback.answer('Удалено')

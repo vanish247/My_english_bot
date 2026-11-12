@@ -1,14 +1,15 @@
 """Добавление слов.
 
-Боту можно прислать что угодно — он сам поймёт, что это:
+Боту можно прислать что угодно — в любой момент, без отдельного режима, — он сам поймёт:
 • пары «слово - перевод»   → добавляет как есть;
 • одно слово или выражение → варианты перевода из словаря (handlers/dictionary.py);
 • текст, пост, песню       → находит в нём слова и выражения, отмечаешь нужные;
 • русское слово или текст  → предлагает карточки «с русского на английский»;
 • таблицу или файл         → .txt, .docx (таблица «слово | транскрипция | перевод»
-                             сразу становится парами), .pdf с текстом.
+                             сразу становится парами), .pdf с текстом;
+• mp3                      → ищет текст песни (handlers/song.py).
 
-Работает и в режиме «📚 Добавить слова», и просто из главного меню.
+Кнопка «➕ Добавить» только подсказывает, что можно прислать.
 """
 import asyncio
 import logging
@@ -20,11 +21,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from handlers.dictionary import AI_PROMPT_PASTED, offer_russian, send_ai_prompt, show_ai_cards, show_for_text
-from handlers.song import find_and_show
+from handlers.song import find_and_show, leave_waiting
 from handlers.study import study_menu
 from utils import ai_prompt, database, dictionary, files, lyrics
 from utils.database import Word
-from utils.keyboards import BTN_ADD, add_kb, add_prompt_kb, added_kb, empty_kb, main_menu
+from utils.keyboards import BTN_ADD, OLD_BTN_ADD, added_kb, empty_kb, main_menu
 from utils.states import AddWords
 from utils.ui import drop_buttons, show
 from utils.words import esc, has_latin, is_russian, parse_words, short, words_count
@@ -33,18 +34,14 @@ log = logging.getLogger(__name__)
 
 router = Router()
 
-PROMPT = (
-    '📚 <b>Добавление слов</b>\n\n'
-    'Пришли мне:\n'
-    '🔤 <b>слово</b> — найду перевод в словаре: <code>ubiquitous</code>\n'
-    '📖 <b>текст</b>, пост или песню — найду в нём слова и выражения\n'
-    '✍️ <b>пары</b> — <code>apple - яблоко, fly - летать</code>\n'
-    '🇷🇺 <b>по-русски</b> — сделаю карточки с русского на английский\n'
-    '📄 <b>файл</b> — .txt, .docx, .pdf; таблицу «слово | транскрипция | перевод» добавлю сразу\n'
-    '🎵 <b>песню</b> — mp3 или название, найду её текст\n'
-    '🤖 или <b>через ИИ</b> — соберу промпт для ChatGPT, Claude, DeepSeek, Алисы, '
-    'а из ответа сделаю карточки\n\n'
-    'Можно несколькими сообщениями подряд. Когда закончишь — жми «Готово».'
+HOW_TO_ADD = (
+    '➕ <b>Как добавить слова</b>\n\n'
+    'Пришли мне что угодно:\n'
+    '• слово или текст на английском\n'
+    '• по-русски — сделаю карточки с русского\n'
+    '• файл .txt / .docx / .pdf или mp3\n'
+    '• пары: <code>apple - яблоко</code>\n\n'
+    'Ещё в меню: <b>🤖 Через ИИ</b> и <b>🎵 Песня</b>'
 )
 NOT_UNDERSTOOD = 'Не понял 🤔 Пришли английское слово, текст или выбери действие в меню 👇'
 MAX_SHOWN = 10     # больше не перечисляем, чтобы ответ не превысил лимит Telegram
@@ -64,24 +61,22 @@ def _bullets(items):
 
 
 @router.message(Command('add'))
-@router.message(F.text == BTN_ADD)
+@router.message(F.text.in_({BTN_ADD, OLD_BTN_ADD}))
 async def add_from_menu(message: Message, state: FSMContext):
-    await state.set_state(AddWords.waiting)
-    await message.answer(PROMPT, reply_markup=add_prompt_kb)
+    await state.clear()
+    await message.answer(HOW_TO_ADD, reply_markup=main_menu)
 
 
 @router.callback_query(F.data == 'add:start')
-async def add_from_button(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(AddWords.waiting)
-    await show(callback, PROMPT, add_prompt_kb)
+async def add_from_button(callback: CallbackQuery):
+    await show(callback, HOW_TO_ADD)
     await callback.answer()
 
 
-@router.message(StateFilter(None, AddWords.waiting), F.text | F.caption, ~F.document)
-async def smart_input(message: Message, state: FSMContext):
+@router.message(StateFilter(None), F.text | F.caption, ~F.document)
+async def smart_input(message: Message):
     """Определяет, что прислали: ответ ИИ, пары, слово или текст."""
     text = (message.text or message.caption or '').strip()
-    adding = await state.get_state() == AddWords.waiting.state
     user_id = message.from_user.id
     if user_id in _pending:                       # продолжение длинного ответа ИИ
         _pending[user_id].append(text)
@@ -90,13 +85,13 @@ async def smart_input(message: Message, state: FSMContext):
         _pending[user_id] = [text]
         await asyncio.sleep(GLUE_DELAY)
         text = ai_prompt.glue(_pending.pop(user_id))
-    await handle_text(message, text, adding)
+    await handle_text(message, text)
 
 
-async def handle_text(message: Message, text, adding, from_file=False):
+async def handle_text(message: Message, text, from_file=False):
     """Разбирает текст из сообщения или файла."""
     if text.startswith('/') or not text:
-        await _not_understood(message, adding)
+        await message.answer(NOT_UNDERSTOOD, reply_markup=main_menu)
         return
     if ai_prompt.is_prompt(text):                 # по ошибке прислали сам промпт, а не ответ ИИ
         await message.answer(AI_PROMPT_PASTED)
@@ -104,7 +99,7 @@ async def handle_text(message: Message, text, adding, from_file=False):
     rows = files.table_rows(text)                 # таблица из Word / Excel
     table = files.parse_table(rows) if rows else []
     if table:
-        await _add_table(message, table, adding)
+        await _add_table(message, table)
         return
     cards = ai_prompt.parse_answer(text)          # строки «фраза | перевод | …» — ответ ИИ
     if cards:
@@ -112,13 +107,13 @@ async def handle_text(message: Message, text, adding, from_file=False):
         return
     pairs, bad = parse_words(text)
     if pairs and any(has_latin(word) for word, _ in pairs) and len(pairs) >= len(bad):
-        await _add_pairs(message, pairs, bad, adding)
+        await _add_pairs(message, pairs, bad)
     elif _old_menu_button(text):                  # «📖 Учить» из старого меню — даём новое
         await message.answer('Меню обновилось 👇', reply_markup=main_menu)
     elif is_russian(text):                        # по-русски → карточки с русского?
         await offer_russian(message, text)
     elif not has_latin(text):
-        await _not_understood(message, adding)
+        await message.answer(NOT_UNDERSTOOD, reply_markup=main_menu)
     else:
         if from_file and len(text) > dictionary.MAX_TEXT:
             await message.answer(
@@ -132,15 +127,7 @@ def _old_menu_button(text):
     return len(text.split()) <= 3 and unicodedata.category(text[0]) == 'So'
 
 
-async def _not_understood(message: Message, adding):
-    if adding:
-        await message.answer('Жду слово, текст, файл или пары «слово - перевод».\n'
-                             'Или нажми «Готово».', reply_markup=add_kb)
-    else:
-        await message.answer(NOT_UNDERSTOOD, reply_markup=main_menu)
-
-
-async def _add_table(message: Message, table, adding):
+async def _add_table(message: Message, table):
     """Таблица «слово | транскрипция | перевод»: пустой перевод берём из словаря."""
     words, missing = [], []
     for word, translation, ipa in table:
@@ -151,10 +138,10 @@ async def _add_table(message: Message, table, adding):
             words.append(Word(word, translation, ipa, ''))
         else:
             missing.append(word)
-    await _add_pairs(message, words, missing, adding, missing_note='⚠️ Не нашёл перевод — пришли парой «слово - перевод»:')
+    await _add_pairs(message, words, missing, missing_note='⚠️ Не нашёл перевод — пришли парой «слово - перевод»:')
 
 
-async def _add_pairs(message: Message, pairs, bad, adding, missing_note=None):
+async def _add_pairs(message: Message, pairs, bad, missing_note=None):
     """pairs — [(слово, перевод)] или готовые Word."""
     user_id = message.from_user.id
     words = [item if isinstance(item, Word) else Word(item[0], item[1], '', '') for item in pairs]
@@ -166,7 +153,7 @@ async def _add_pairs(message: Message, pairs, bad, adding, missing_note=None):
         lines += _bullets([f'{w.word} — {w.translation}' for w in added])
     if duplicates:
         lines += [''] if lines else []
-        lines.append('☑️ Уже были в словаре:')
+        lines.append('☑️ Уже были в «Моих словах»:')
         lines += _bullets([f'{w.word} — {w.translation}' for w in duplicates])
     if bad and missing_note:
         lines += [''] if lines else []
@@ -178,31 +165,24 @@ async def _add_pairs(message: Message, pairs, bad, adding, missing_note=None):
         lines += _bullets(bad)
         lines.append('Пример: <code>apple - яблоко</code>')
 
-    lines += ['', f'📚 В словаре: {words_count(database.count_words(user_id))}']
-    if adding:
-        lines.append('Присылай ещё или жми «Готово».')
-    await message.answer('\n'.join(lines), reply_markup=add_kb if adding else added_kb)
+    lines += ['', f'📋 Мои слова: {database.count_words(user_id)}']
+    await message.answer('\n'.join(lines), reply_markup=added_kb)
 
 
-@router.message(StateFilter(None, AddWords.waiting, AddWords.ai, AddWords.song), F.document)
+@router.message(StateFilter(None, AddWords.ai, AddWords.song), F.document)
 async def document_input(message: Message, state: FSMContext, bot: Bot):
     """Прислали файл: .txt, .docx, .pdf, .srt — или песню mp3 файлом."""
     document = message.document
     current = await state.get_state()
     if lyrics.is_audio_name(document.file_name) or (document.mime_type or '').startswith('audio/'):
-        if current in (AddWords.ai.state, AddWords.song.state):
-            data = await state.get_data()
-            previous = data.get('song_prev') or data.get('ai_prev')
-            await (state.set_state(AddWords.waiting) if previous == AddWords.waiting.state else state.clear())
+        await leave_waiting(state)
         await find_and_show(message, query=lyrics.from_filename(document.file_name))
         return
     if current == AddWords.song.state:
         await message.answer('🎵 Жду название песни или mp3. Текст песни можно вставить сообщением.')
         return
-    adding = current == AddWords.waiting.state
     if not files.kind(document.file_name):
-        await message.answer('📄 Пока понимаю файлы .txt, .docx, .pdf и .srt.',
-                             reply_markup=add_kb if adding else None)
+        await message.answer('📄 Пока понимаю файлы .txt, .docx, .pdf и .srt.')
         return
     if document.file_size and document.file_size > files.MAX_FILE:
         await message.answer('📄 Файл больше 5 МБ — пришли его частями.')
@@ -219,11 +199,7 @@ async def document_input(message: Message, state: FSMContext, bot: Bot):
         return
 
     if current == AddWords.ai.state:              # нажали «🤖 Через ИИ» и прислали файл
-        data = await state.get_data()
-        if data.get('ai_prev') == AddWords.waiting.state:
-            await state.set_state(AddWords.waiting)
-        else:
-            await state.clear()
+        await state.clear()
         text = content.text or '\n'.join(f'{w} — {t}' for w, t, _ in content.pairs)
         if text.strip():
             await send_ai_prompt(bot, message.from_user.id, text)
@@ -232,32 +208,23 @@ async def document_input(message: Message, state: FSMContext, bot: Bot):
         return
 
     if content.pairs:
-        await _add_table(message, content.pairs, adding)
+        await _add_table(message, content.pairs)
     if content.text.strip():
-        await handle_text(message, content.text.strip(), adding, from_file=True)
+        await handle_text(message, content.text.strip(), from_file=True)
     elif not content.pairs:
         await message.answer('📄 В файле не нашёл текста.')
 
 
-@router.message(AddWords.waiting)
-async def add_not_text(message: Message):
-    """Прислали стикер, фото без подписи и т.п. вместо текста."""
-    await message.answer('Жду текст: слово, пост или пары «слово - перевод».\n'
-                         'Или нажми «Готово».', reply_markup=add_kb)
-
-
 @router.callback_query(F.data == 'add:done')
 async def add_done(callback: CallbackQuery, state: FSMContext):
-    # Сбрасываем состояние, только если сейчас идёт добавление —
-    # старая кнопка «Готово» не должна прерывать, например, тренировку
+    """«✅ Готово» из прошлой версии (режима добавления больше нет) — ведём в «Учить»."""
     if await state.get_state() == AddWords.waiting.state:
         await state.clear()
     user_id = callback.from_user.id
     await drop_buttons(callback)
-    # Сразу показываем «Как будем учить?»: карточки или рассылка по расписанию
     if database.count_words(user_id):
-        text, kb = study_menu(user_id, header='👍 <b>Готово!</b> Слова сохранены.\n\n')
+        text, kb = study_menu(user_id)
     else:
-        text, kb = '👍 Готово! Словарь пока пуст.', empty_kb
+        text, kb = HOW_TO_ADD, empty_kb
     await callback.bot.send_message(user_id, text, reply_markup=kb)
     await callback.answer()

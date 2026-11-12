@@ -8,7 +8,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class AddWords(StatesGroup):
-    waiting = State()   # режим «Добавить слова»: ждём слова, текст или пары
+    waiting = State()   # прошлая версия: режим «Добавить слова» (больше не включается)
     custom = State()    # ждём свой перевод для слова
     ai = State()        # ждём текст, из которого собрать промпт для ИИ
     field = State()     # ждём новое значение поля карточки (правка до добавления)
@@ -17,4 +17,7 @@ class AddWords(StatesGroup):
 
 class Study(StatesGroup):
     card = State()      # идёт тренировка по карточкам
-    edit = State()      # ждём исправленный перевод для карточки
+
+
+class WordEdit(StatesGroup):
+    value = State()     # ждём новое значение поля уже добавленной карточки (handlers/editor.py)

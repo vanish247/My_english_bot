@@ -2,7 +2,7 @@
 
 • mp3 (как аудио или как файл) — исполнитель и название берутся из свойств файла
   или из имени файла;
-• «🎵 Текст песни» в «Добавить слова» или /song — пишешь название сам.
+• «🎵 Песня» в меню или /song — пишешь название сам.
 
 Сам звук не распознаём (на сервере это не потянуть): текст берём из базы LRCLIB
 (utils/lyrics.py). Дальше всё как с обычным текстом: «Нашёл в тексте» или «Через ИИ».
@@ -16,8 +16,8 @@ from aiogram.types import CallbackQuery, Message
 
 from handlers.dictionary import send_ai_prompt, show_extraction
 from utils import dictionary, lyrics
-from utils.keyboards import MENU_BUTTONS, inline
-from utils.states import AddWords, Study
+from utils.keyboards import BTN_SONG, MENU_BUTTONS, inline
+from utils.states import AddWords
 from utils.ui import drop_buttons, show
 from utils.words import esc, is_russian, plural, short
 
@@ -49,11 +49,8 @@ def _screen(callback):
 # ─── Как попасть: кнопка, команда, mp3 ─────────────────────
 
 async def _ask_name(bot, user_id, state):
-    previous = await state.get_state()
-    if previous == Study.card.state:
-        previous = None
+    await state.clear()
     await state.set_state(AddWords.song)
-    await state.update_data(song_prev=previous)
     await bot.send_message(user_id, SONG_HELP)
 
 
@@ -64,30 +61,26 @@ async def song_button(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(Command('song'))
+@router.message(F.text == BTN_SONG)
 async def song_command(message: Message, state: FSMContext):
     await _ask_name(message.bot, message.from_user.id, state)
 
 
-async def _restore(state):
-    """Выходим из «жду название песни» туда, где были (в режим добавления или в меню)."""
+async def leave_waiting(state):
+    """Дождались песни: выходим из «жду название песни» / «жду текст для ИИ»."""
     if await state.get_state() in (AddWords.song.state, AddWords.ai.state):
-        data = await state.get_data()
-        previous = data.get('song_prev') or data.get('ai_prev')
-        if previous == AddWords.waiting.state:
-            await state.set_state(AddWords.waiting)
-        else:
-            await state.clear()
+        await state.clear()
 
 
 @router.message(AddWords.song, F.text, ~F.text.in_(MENU_BUTTONS), ~F.text.startswith('/'))
 async def song_name(message: Message, state: FSMContext):
-    await _restore(state)
+    await leave_waiting(state)
     await find_and_show(message, query=' '.join(message.text.split())[:150])
 
 
-@router.message(StateFilter(None, AddWords.waiting, AddWords.song, AddWords.ai), F.audio)
+@router.message(StateFilter(None, AddWords.song, AddWords.ai), F.audio)
 async def audio_input(message: Message, state: FSMContext):
-    await _restore(state)
+    await leave_waiting(state)
     audio = message.audio
     await find_and_show(message, query=lyrics.from_filename(audio.file_name), artist=audio.performer or '',
                         title=audio.title or '', duration=audio.duration)
@@ -98,7 +91,7 @@ async def song_not_text(message: Message):
     await message.answer('Напиши исполнителя и название текстом или пришли mp3 🙂')
 
 
-@router.message(StateFilter(None, AddWords.waiting, AddWords.song), F.voice | F.video_note)
+@router.message(StateFilter(None, AddWords.song), F.voice | F.video_note)
 async def voice_input(message: Message):
     await message.answer('🎤 Голос и видео я не распознаю. Напиши название песни — найду её текст.',
                          reply_markup=inline([('🎵 Найти текст песни', 'sg:start')]))

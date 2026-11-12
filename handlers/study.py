@@ -1,10 +1,9 @@
 """Раздел «Учить».
 
-Сначала экран выбора — как учить:
-• 🎴 Карточки — прямо сейчас: слово → показать перевод → знаю / не знаю / пропустить
-  (по порядку, вперемешку или только незнакомые — где последний ответ не «Знаю»)
-• 🔔 По расписанию — бот сам присылает слова (это в handlers/mailing.py)
-• 📊 Статистика — отдельным сообщением, его удобно переслать репетитору
+Экран «🎴 Учить»: первая кнопка — самое нужное (незнакомые или «Начать»),
+ниже — все по порядку / вперемешку и 🔔 Рассылка (handlers/mailing.py).
+Карточка: показать перевод → знаю / не знаю; на обороте ✏️ Изменить (handlers/editor.py) и 🗑.
+📊 Статистика — отдельным сообщением, его удобно переслать репетитору.
 
 Ответы «Знаю» / «Не знаю» запоминаются у каждого слова. Карточки «с русского»
 (direction='ru') показывают сначала русское, вспомнить нужно английское.
@@ -22,41 +21,37 @@ from aiogram.types import CallbackQuery, Message
 
 from utils import database
 from utils.keyboards import (
-    BTN_STUDY, MENU_BUTTONS, PHRASES, card_back_kb, card_front_kb, edit_cancel_kb, empty_kb,
-    study_done_kb, study_menu_kb,
+    BTN_STUDY, PHRASES, card_back_kb, card_front_kb, empty_kb, study_done_kb, study_menu_kb,
 )
 from utils.states import Study
-from utils.ui import drop_buttons, show
+from utils.ui import show
 from utils.database import Word
-from utils.dictionary import transcription
-from utils.words import esc, has_latin, short, words_count
+from utils.words import esc, short, words_count
 
 router = Router()
 
-EMPTY_TEXT = '🎴 Словарь пока пуст — учить нечего.\nДобавь первые слова 👇'
+EMPTY_TEXT = '🎴 В «Моих словах» пока пусто — учить нечего.\nДобавь первые слова 👇'
 STALE_TEXT = 'Эта карточка устарела. Нажми 🎴 Учить, чтобы начать заново.'
 
 
-# ─── Экран «Как будем учить?» ──────────────────────────────
+# ─── Экран «🎴 Учить» ──────────────────────────────────────
+
+def progress_line(known, unknown, new):
+    return f'✅ Знаю {known} · 🔁 Не знаю {unknown} · 🆕 Новых {new}'
+
 
 def study_menu(user_id, header=''):
-    """Текст и кнопки экрана выбора. header — строка сверху, например «Готово!»."""
+    """Текст и кнопки экрана «Учить». header — строка сверху, например «Незнакомых не осталось»."""
     total = database.count_words(user_id)
     if total == 0:
         return EMPTY_TEXT, empty_kb
     minutes = database.get_mailing(user_id)
-    mailing = f'✅ {PHRASES.get(minutes, f"каждые {minutes} мин")}' if minutes else '⛔ выключена'
+    mailing = PHRASES.get(minutes, f'каждые {minutes} мин') if minutes else ''
     _, known, unknown, new = database.word_stats(user_id)
-    progress = f'✅ Знаю: {known} · 🔁 Не знаю: {unknown} · 🆕 Новых: {new}\n' if known or unknown else ''
-    text = (f'{header}'
-            '🎴 <b>Как будем учить?</b>\n\n'
-            f'📚 В словаре: {words_count(total)}\n'
-            f'{progress}'
-            f'🔔 Рассылка: {mailing}\n\n'
-            '🎴 <b>Карточки</b> — видишь слово, вспоминаешь, проверяешь перевод. '
-            '<b>По порядку</b> — как в тексте или песне, <b>вперемешку</b> — чтобы не запоминать место в списке\n'
-            '🔔 <b>По расписанию</b> — буду сам присылать по слову раз в несколько минут')
-    return text, study_menu_kb(unknown + new, known)
+    text = f'{header}🎴 <b>Учить</b> — {words_count(total)}'
+    if known or unknown:
+        text += '\n' + progress_line(known, unknown, new)
+    return text, study_menu_kb(unknown + new, known, mailing)
 
 
 @router.message(Command('study'))
@@ -197,68 +192,7 @@ async def stop(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ─── Исправить или удалить слово прямо в карточке ──────────
-
-@router.callback_query(Study.card, F.data == 'study:edit')
-async def edit_start(callback: CallbackQuery, state: FSMContext):
-    data = await _session(callback, state)
-    if data is None:
-        return
-    item = Word(*data['cards'][data['pos']])
-    await state.set_state(Study.edit)            # данные тренировки сохраняются
-    if item.direction == 'ru':                   # у карточки «с русского» исправляем английское
-        prompt = (f'✏️ Напиши, как правильно по-английски «<b>{esc(item.translation)}</b>»\n'
-                  f'Сейчас: {esc(item.word)}')
-    else:
-        prompt = (f'✏️ Напиши правильный перевод для «<b>{esc(item.word)}</b>»\n'
-                  f'Сейчас: {esc(item.translation) if item.translation else "—"}')
-    await callback.bot.send_message(callback.from_user.id, prompt, reply_markup=edit_cancel_kb)
-    await callback.answer()
-
-
-@router.message(Study.edit, F.text, ~F.text.in_(MENU_BUTTONS), ~F.text.startswith('/'))
-async def edit_save(message: Message, state: FSMContext):
-    data = await state.get_data()
-    user_id = message.from_user.id
-    item = Word(*data['cards'][data['pos']])
-    text = ' '.join(message.text.split())[:100]
-    if item.direction == 'ru':
-        if not has_latin(text):
-            await message.answer('Напиши по-английски 🙂', reply_markup=edit_cancel_kb)
-            return
-        database.update_word(user_id, item.id, text)
-        item = item._replace(word=text, transcription=transcription(text))
-    else:
-        database.update_translation(user_id, item.id, text)
-        item = item._replace(translation=text)
-    data['cards'][data['pos']] = tuple(item)
-
-    # Старую карточку закрываем, исправленную присылаем вниз — продолжать удобнее
-    try:
-        await message.bot.edit_message_reply_markup(
-            chat_id=user_id, message_id=data['message_id'], reply_markup=None)
-    except Exception:
-        pass
-    done = '✅ Исправил' if item.direction == 'ru' else '✅ Перевод исправлен'
-    sent = await message.answer(f'{done}\n\n' + _card(data, revealed=True),
-                                reply_markup=card_back_kb)
-    data['message_id'] = sent.message_id
-    await state.set_state(Study.card)
-    await state.set_data(data)
-
-
-@router.message(Study.edit, ~F.text.in_(MENU_BUTTONS))
-async def edit_not_text(message: Message):
-    await message.answer('Напиши перевод текстом 🙂', reply_markup=edit_cancel_kb)
-
-
-@router.callback_query(F.data == 'study:edit_cancel')
-async def edit_cancel(callback: CallbackQuery, state: FSMContext):
-    if await state.get_state() == Study.edit.state:
-        await state.set_state(Study.card)
-    await drop_buttons(callback)
-    await callback.answer('Оставил как было')
-
+# ─── Удалить слово прямо в карточке (исправить — handlers/editor.py) ───
 
 @router.callback_query(Study.card, F.data == 'study:delete')
 async def delete_card(callback: CallbackQuery, state: FSMContext):
@@ -273,7 +207,7 @@ async def delete_card(callback: CallbackQuery, state: FSMContext):
         await show(callback, _summary(data, finished=True), study_done_kb(data.get('mode', 'cards')))
     else:
         await _show_card(callback, state, data, revealed=False)
-    await callback.answer(f'🗑 Удалил «{item.word}» из словаря')
+    await callback.answer(f'🗑 Удалил «{item.word}»')
 
 
 # ─── Статистика ────────────────────────────────────────────
@@ -299,7 +233,7 @@ def stats_text(user_id):
 async def stats(callback: CallbackQuery):
     user_id = callback.from_user.id
     if not database.count_words(user_id):
-        await callback.answer('Словарь пока пуст')
+        await callback.answer('Пока нет слов')
         return
     await callback.bot.send_message(user_id, stats_text(user_id))
     await callback.answer()

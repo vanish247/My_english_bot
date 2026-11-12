@@ -11,9 +11,15 @@ DB = 'bot_database.db'
 #   word — английское слово, translation — русский перевод (для карточек «с русского» тоже);
 #   example_ru — перевод примера; direction — 'en' (учим английское → русское)
 #   или 'ru' (карточка показывает русское, вспоминаем английское);
-#   id — номер в базе (у слов, прочитанных из базы)
-Word = namedtuple('Word', 'word translation transcription example example_ru direction id',
-                  defaults=('', 'en', None))
+#   id — номер в базе, answer — последний ответ в карточке: 'know', 'dontknow' или ''
+#   (у слов, прочитанных из базы)
+Word = namedtuple('Word', 'word translation transcription example example_ru direction id answer',
+                  defaults=('', 'en', None, ''))
+_COLUMNS = 'word, translation, transcription, example, example_ru, direction, id, last_answer'
+
+
+def _word(row):
+    return Word(*(value or '' for value in row[:5]), direction=row[5] or 'en', id=row[6], answer=row[7] or '')
 
 
 def init_db():
@@ -146,12 +152,34 @@ def get_words(user_id: int, only_unknown=False) -> list:
     only_unknown — только незнакомые: последний ответ не «Знаю» (или ещё не учили)."""
     condition = " AND last_answer != 'know'" if only_unknown else ''
     with sqlite3.connect(DB) as conn:
-        rows = conn.execute(
-            'SELECT word, translation, transcription, example, example_ru, direction, id FROM words '
-            f'WHERE user_id = ?{condition} ORDER BY id',
-            (user_id,)
-        ).fetchall()
-    return [Word(*(value or '' for value in row[:5]), direction=row[5] or 'en', id=row[6]) for row in rows]
+        rows = conn.execute(f'SELECT {_COLUMNS} FROM words WHERE user_id = ?{condition} ORDER BY id',
+                            (user_id,)).fetchall()
+    return [_word(row) for row in rows]
+
+
+def get_word(user_id: int, word_id: int):
+    """Одно слово (Word) или None, если его уже удалили."""
+    with sqlite3.connect(DB) as conn:
+        row = conn.execute(f'SELECT {_COLUMNS} FROM words WHERE user_id = ? AND id = ?',
+                           (user_id, word_id)).fetchone()
+    return _word(row) if row else None
+
+
+_EDITABLE = {'word', 'translation', 'transcription', 'example', 'example_ru'}
+
+
+def update_word_field(user_id: int, word_id: int, column: str, value: str):
+    """Исправляет одно поле карточки. Новое слово — с новой транскрипцией."""
+    if column not in _EDITABLE:
+        raise ValueError(column)
+    with sqlite3.connect(DB) as conn:
+        if column == 'word':
+            value = normalize_case(value)
+            conn.execute('UPDATE words SET word = ?, transcription = ? WHERE id = ? AND user_id = ?',
+                         (value, transcription(value), word_id, user_id))
+        else:
+            conn.execute(f'UPDATE words SET {column} = ? WHERE id = ? AND user_id = ?',
+                         (value, word_id, user_id))
 
 
 def record_answer(user_id: int, word_id: int, known: bool):
@@ -175,24 +203,10 @@ def hard_words(user_id: int, limit=20) -> list:
     """Слова, на которые последний ответ «Не знаю»: чаще забываемые — выше."""
     with sqlite3.connect(DB) as conn:
         rows = conn.execute(
-            'SELECT word, translation, transcription, example, example_ru, direction, id FROM words '
+            f"SELECT {_COLUMNS} FROM words "
             "WHERE user_id = ? AND last_answer = 'dontknow' ORDER BY dontknow_count DESC, id LIMIT ?",
             (user_id, limit)).fetchall()
-    return [Word(*(value or '' for value in row[:5]), direction=row[5] or 'en', id=row[6]) for row in rows]
-
-
-def update_word(user_id: int, word_id: int, word: str):
-    """Исправляет английскую сторону карточки (у карточек «с русского»)"""
-    with sqlite3.connect(DB) as conn:
-        conn.execute('UPDATE words SET word = ?, transcription = ? WHERE id = ? AND user_id = ?',
-                     (word, transcription(word), word_id, user_id))
-
-
-def update_translation(user_id: int, word_id: int, translation: str):
-    """Исправляет перевод одного слова"""
-    with sqlite3.connect(DB) as conn:
-        conn.execute('UPDATE words SET translation = ? WHERE id = ? AND user_id = ?',
-                     (translation, word_id, user_id))
+    return [_word(row) for row in rows]
 
 
 def delete_word(user_id: int, word_id: int):
